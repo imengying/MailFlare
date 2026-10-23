@@ -138,7 +138,7 @@ fn preflight(req: &Request, allowed: Option<&str>) -> Response {
         let _ = headers.set("access-control-allow-methods", "GET, POST, PUT, DELETE, OPTIONS");
         let _ = headers.set(
             "access-control-allow-headers",
-            "authorization, content-type",
+            "authorization, content-type, range",
         );
         let _ = headers.set("access-control-max-age", "86400");
         let _ = headers.append("vary", "origin");
@@ -641,10 +641,25 @@ async fn get_attachment(req: &Request, ctx: &ApiCtx<'_>, object_id: &str) -> App
     headers.set("x-content-type-options", "nosniff")?;
     // 私有内容：中间层不缓存，浏览器可缓存 10 分钟（token 有效期 600s）。
     headers.set("cache-control", "private, max-age=600")?;
-    if inline {
-        // 即使 content-type 被伪造，CSP 也能挡住脚本执行。
-        headers.set("content-security-policy", "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox")?;
-    }
+    // 跨域部署时，浏览器默认不会把 Content-Disposition 暴露给 JS，
+    // 前端就拿不到文件名。显式放开（仅这两个头，不放开整个响应）。
+    headers.set(
+        "access-control-expose-headers",
+        "content-disposition, content-length",
+    )?;
+
+    // CSP 对**所有**附件都设，不只 inline：
+    // 即使 Content-Disposition 因为某种原因退化、浏览器选择内联渲染，
+    // `default-src 'none'` 也能确保里面的脚本不会执行。
+    // inline 的情况额外允许 data: 图片（邮件正文里的内嵌图）。
+    headers.set(
+        "content-security-policy",
+        if inline {
+            "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox"
+        } else {
+            "default-src 'none'; sandbox"
+        },
+    )?;
 
     // 交给运行时直接 pipe，零拷贝转发。
     Ok(Response::from_body(body.response_body()?)?.with_headers(headers))

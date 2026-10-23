@@ -56,13 +56,42 @@ export function buildSrcdoc(html: string, allowRemoteImages: boolean): string {
     return `${head}<pre style="white-space:pre-wrap;word-break:break-word;margin:0">${escapeHtml(html)}</pre>`;
   }
 
-  if (/<head[\s>]/i.test(html)) {
-    return html.replace(/<head([^>]*)>/i, `<head$1>${head}`);
+  // `allow-popups-to-escape-sandbox` 让新标签页脱离沙箱，所以必须确保它们
+  // 拿不到 opener 句柄。CSP 无法表达 rel，只能在字符串层面补。
+  const guarded = addLinkRel(html);
+
+  if (/<head[\s>]/i.test(guarded)) {
+    return guarded.replace(/<head([^>]*)>/i, `<head$1>${head}`);
   }
-  if (/<html[\s>]/i.test(html)) {
-    return html.replace(/<html([^>]*)>/i, `<html$1><head>${head}</head>`);
+  if (/<html[\s>]/i.test(guarded)) {
+    return guarded.replace(/<html([^>]*)>/i, `<html$1><head>${head}</head>`);
   }
-  return `<head>${head}</head>${html}`;
+  return `<head>${head}</head>${guarded}`;
+}
+
+/**
+ * 给所有 `<a>` 补上 `rel="noopener noreferrer"`。
+ *
+ * 配合 `allow-popups-to-escape-sandbox`：新标签页虽然脱离了沙箱，
+ * 但拿不到 `window.opener`，无法反向操作本页面，也带不上 Referer。
+ *
+ * 只做字符串替换而不是 DOM 解析，因为 srcdoc 是纯文本、且不能依赖
+ * iframe 内部的脚本执行。
+ */
+export function addLinkRel(html: string): string {
+  return html.replace(/<a\b([^>]*)>/gi, (match, attrs: string) => {
+    // 已有 rel：保留原值，只补上缺失的两项。
+    const existing = /\brel\s*=\s*(["'])(.*?)\1/i.exec(attrs);
+    if (existing) {
+      const current = existing[2] ?? "";
+      const lower = current.toLowerCase();
+      const needs = ["noopener", "noreferrer"].filter((token) => !lower.includes(token));
+      if (needs.length === 0) return match;
+      const merged = current.trim() ? `${current} ${needs.join(" ")}` : needs.join(" ");
+      return `<a${attrs.replace(existing[0], `rel="${merged}"`)}>`;
+    }
+    return `<a${attrs} rel="noopener noreferrer">`;
+  });
 }
 
 /**

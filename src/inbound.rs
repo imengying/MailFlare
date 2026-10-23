@@ -25,7 +25,13 @@ pub async fn handle(
     env: Env,
     ctx: Context,
 ) -> worker::Result<()> {
-    // 配置缺失时直接拒收，避免静默丢信。
+    // 信封地址要在任何提前返回之前取到：告警消息里需要它。
+    let envelope_to = message.to();
+    let envelope_from = message.from();
+    let raw_size = message.raw_size();
+
+    // 配置缺失时直接拒收。此时没法告警（推送配置也在 D1 里，且很可能
+    // 连 D1 绑定都没配好），只能写日志——运维应该盯 Worker 日志。
     let cfg = match Config::from_env(&env) {
         Ok(c) => c,
         Err(e) => {
@@ -35,28 +41,57 @@ pub async fn handle(
         }
     };
 
-    // 先用 rawSize 判大小：超限时数据根本不会被读进内存。
-    let raw_size = message.raw_size();
+    // D1 句柄提前取：既给正常流程用，也给失败告警用。
+    // 拿不到就直接返回错误（无法告警也无法入库）。
+    let db = env.d1("DB")?;
+    let bucket = env.bucket("R2")?;
+
+    // ---- 体积检查 ------------------------------------------------------
+    // 超限邮件在**读取之前**就拒收，数据不会进入 WASM 堆。
     if raw_size > cfg.max_message_bytes as f64 {
-        console_error!(
-            "[mailflare] 邮件过大被拒收：{:.1}MB > {}MB",
-            raw_size / 1024.0 / 1024.0,
-            cfg.max_message_bytes / 1024 / 1024
+        let limit_mb = cfg.max_message_bytes / 1024 / 1024;
+        let detail = format!("{:.2} MB 超过上限 {limit_mb} MB", raw_size / 1024.0 / 1024.0);
+        console_error!("[mailflare] 邮件过大被拒收：{detail}");
+
+        // 超大邮件往往是「有人误发了大附件」，值得告警一次——
+        // 否则发件人只会看到退信，而你完全不知道发生过。
+        spawn_alert(
+            &ctx,
+            &env,
+            notify::InboundFailure::TooLarge,
+            detail,
+            &envelope_from,
+            &envelope_to,
+            raw_size,
         );
         message.set_reject("邮件体积超过 MailFlare 限制");
         return Ok(());
     }
 
-    let envelope_to = message.to();
-    let envelope_from = message.from();
     let received_at = now_ms();
 
-    // 只在这里把原始报文拉进内存；之后一路按值传递，避免重复拷贝。
-    let raw = message.raw_bytes().await?;
+    // ---- 读取原始报文 --------------------------------------------------
+    // 这里是唯一会把整封邮件拉进内存的地方。
+    let raw = match message.raw_bytes().await {
+        Ok(raw) => raw,
+        Err(e) => {
+            let detail = format!("读取邮件原始内容失败：{e}");
+            console_error!("[mailflare] {detail}");
+            spawn_alert(
+                &ctx,
+                &env,
+                notify::InboundFailure::StorageError,
+                detail,
+                &envelope_from,
+                &envelope_to,
+                raw_size,
+            );
+            message.set_reject("MailFlare 读取邮件失败，请稍后重试");
+            return Ok(());
+        }
+    };
 
-    let db = env.d1("DB")?;
-    let bucket = env.bucket("R2")?;
-
+    // ---- 解析 + 落库 ---------------------------------------------------
     match process(
         &cfg,
         &db,
@@ -80,16 +115,68 @@ pub async fn handle(
         }
         Ok(None) => {
             // 重复投递：静默成功，发信方无需重试。
+            // 这是**预期行为**，不该告警（SMTP 重试很常见）。
             console_log!("[mailflare] 跳过重复投递的邮件（Message-ID 已存在）");
         }
         Err(e) => {
-            console_error!("[mailflare] 邮件入库失败：{e:?}");
+            // 区分「邮件本身有问题」与「我方后端故障」：
+            // 前者告警意义不大（垃圾邮件/畸形邮件很常见），后者必须告警。
+            let (failure, detail) = match &e {
+                AppError::BadRequest(msg) => (
+                    notify::InboundFailure::Unparsable,
+                    format!("邮件解析失败：{msg}"),
+                ),
+                other => (
+                    notify::InboundFailure::StorageError,
+                    format!("邮件入库失败：{other:?}"),
+                ),
+            };
+            console_error!("[mailflare] {detail}");
+
+            if matches!(failure, notify::InboundFailure::StorageError) {
+                spawn_alert(
+                    &ctx,
+                    &env,
+                    failure,
+                    detail,
+                    &envelope_from,
+                    &envelope_to,
+                    raw_size,
+                );
+            }
+
             // 让发信方重试，比默默吞掉更可靠。
             message.set_reject("MailFlare 处理邮件时发生内部错误，请稍后重试");
         }
     }
 
     Ok(())
+}
+
+/// 把告警挂到 `waitUntil`，不阻塞 SMTP 响应。
+fn spawn_alert(
+    ctx: &Context,
+    env: &Env,
+    failure: notify::InboundFailure,
+    detail: String,
+    envelope_from: &str,
+    envelope_to: &str,
+    raw_size: f64,
+) {
+    // `D1Database` 没有实现 `Clone`，不能直接捕获到 'static 的异步块里。
+    // `Env` 是 Clone 的（内部就是 JsValue），把它复制一份带进去，
+    // 在异步块里重新 `env.d1("DB")` 取绑定即可——这一步只是读一个 JS 属性。
+    let env = env.clone();
+    let from = envelope_from.to_string();
+    let to = envelope_to.to_string();
+
+    ctx.wait_until(async move {
+        let Ok(db) = env.d1("DB") else {
+            console_error!("[mailflare] 告警失败：无法访问 D1");
+            return;
+        };
+        notify::alert_inbound_failure(&db, failure, &detail, &from, &to, raw_size).await;
+    });
 }
 
 /// 解析 + 写 R2 + 写 D1 的完整流水线。

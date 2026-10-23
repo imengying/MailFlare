@@ -172,18 +172,18 @@ struct TelegramPayload<'a> {
     disable_web_page_preview: bool,
 }
 
-async fn push_telegram(ctx: &PushContext<'_>) -> ChannelResult {
-    let s = ctx.settings;
-    if !s.telegram_enabled {
-        return ChannelResult::Skipped;
-    }
-    if s.telegram_bot_token.is_empty() || s.telegram_chat_id.is_empty() {
+/// 发送一条 Telegram 文本消息。
+///
+/// 抽出这一层是为了让「新邮件通知」和「收信失败告警」共用同一套
+/// URL 构造、序列化、超时与错误处理，避免两份容易走样的副本。
+async fn send_telegram_text(settings: &Settings, text: String) -> ChannelResult {
+    if settings.telegram_bot_token.is_empty() || settings.telegram_chat_id.is_empty() {
         return ChannelResult::Failed("Telegram token 或 chat_id 未配置".into());
     }
 
     let payload = TelegramPayload {
-        chat_id: &s.telegram_chat_id,
-        text: telegram_text(ctx),
+        chat_id: &settings.telegram_chat_id,
+        text,
         parse_mode: "MarkdownV2",
         disable_web_page_preview: true,
     };
@@ -191,7 +191,7 @@ async fn push_telegram(ctx: &PushContext<'_>) -> ChannelResult {
     // token 只含 [0-9A-Za-z:_-]，无需 URL 编码。
     let Ok(url) = Url::parse(&format!(
         "https://api.telegram.org/bot{}/sendMessage",
-        s.telegram_bot_token
+        settings.telegram_bot_token
     )) else {
         return ChannelResult::Failed("Telegram bot token 含非法字符".into());
     };
@@ -228,26 +228,27 @@ struct BarkPayload<'a> {
     url: Option<String>,
 }
 
-async fn push_bark(ctx: &PushContext<'_>) -> ChannelResult {
-    let s = ctx.settings;
-    if !s.bark_enabled {
-        return ChannelResult::Skipped;
-    }
-    if s.bark_device_key.is_empty() {
+/// 发送一条 Bark 消息。同样抽成原语供告警复用。
+async fn send_bark_text(
+    settings: &Settings,
+    title: String,
+    body: String,
+    url: Option<String>,
+) -> ChannelResult {
+    if settings.bark_device_key.is_empty() {
         return ChannelResult::Failed("Bark device key 未配置".into());
     }
 
-    let preview: String = ctx.email.preview.trim().chars().take(400).collect();
     let payload = BarkPayload {
-        device_key: &s.bark_device_key,
-        title: format!("📬 {}", ctx.email.subject),
-        body: format!("{}\n{}", short_sender(&ctx.email.sender), preview),
+        device_key: &settings.bark_device_key,
+        title,
+        body,
         group: "MailFlare",
-        url: detail_link(ctx.public_url, &ctx.email.id),
+        url,
     };
 
     // 统一走 POST {server}/push：对长文本与特殊字符最安全。
-    let Ok(url) = Url::parse(&format!("{}/push", s.bark_server)) else {
+    let Ok(url) = Url::parse(&format!("{}/push", settings.bark_server)) else {
         return ChannelResult::Failed("Bark 服务地址非法".into());
     };
 
@@ -272,6 +273,31 @@ async fn push_bark(ctx: &PushContext<'_>) -> ChannelResult {
     }
 }
 
+/// 新邮件的 Telegram 通知。
+async fn push_telegram(ctx: &PushContext<'_>) -> ChannelResult {
+    if !ctx.settings.telegram_enabled {
+        return ChannelResult::Skipped;
+    }
+    send_telegram_text(ctx.settings, telegram_text(ctx)).await
+}
+
+/// 新邮件的 Bark 通知。
+async fn push_bark(ctx: &PushContext<'_>) -> ChannelResult {
+    let s = ctx.settings;
+    if !s.bark_enabled {
+        return ChannelResult::Skipped;
+    }
+
+    let preview: String = ctx.email.preview.trim().chars().take(400).collect();
+    send_bark_text(
+        s,
+        format!("📬 {}", ctx.email.subject),
+        format!("{}\n{}", short_sender(&ctx.email.sender), preview),
+        detail_link(ctx.public_url, &ctx.email.id),
+    )
+    .await
+}
+
 /// 并发推送两个渠道。
 pub async fn dispatch(ctx: &PushContext<'_>) {
     let (telegram, bark) = futures_util::join!(push_telegram(ctx), push_bark(ctx));
@@ -283,6 +309,123 @@ pub async fn dispatch(ctx: &PushContext<'_>) {
                 console_error!("[mailflare] {name} 推送失败 ({}): {msg}", ctx.email.id)
             }
             ChannelResult::Ok => console_log!("[mailflare] {name} 推送成功 ({})", ctx.email.id),
+            ChannelResult::Skipped => {}
+        }
+    }
+}
+
+// ===========================================================================
+// 故障告警
+// ===========================================================================
+
+/// 收信失败的原因分类。
+///
+/// 分类的意义：告警消息里要让人一眼看出「是配置问题、容量问题还是后端故障」，
+/// 而不是丢一段难读的 Debug 输出。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboundFailure {
+    /// 邮件体积超过 MAX_MESSAGE_BYTES
+    TooLarge,
+    /// 解析失败（畸形邮件）
+    Unparsable,
+    /// D1 或 R2 等后端写入异常
+    StorageError,
+}
+
+impl InboundFailure {
+    fn label(self) -> &'static str {
+        match self {
+            Self::TooLarge => "邮件过大",
+            Self::Unparsable => "解析失败",
+            Self::StorageError => "存储异常",
+        }
+    }
+
+    /// 这类失败是否值得立即告警。
+    ///
+    /// 当前三种都值得告警；保留这个方法是为了将来加入「无需打扰用户」的
+    /// 分类（例如重复投递）时有统一入口。
+    fn should_alert(self) -> bool {
+        true
+    }
+}
+
+/// 收信失败时推送一条告警，避免「静默丢信」。
+///
+/// ## 为什么只推给已启用的渠道
+/// 告警本身也依赖 Telegram/Bark 配置。如果两个渠道都没开，就只写日志——
+/// 这种情况下本来也没有可用的通知手段。
+///
+/// ## 为什么告警不计入正常推送的限流
+/// 告警是低频事件（只在实际出错时触发），不需要额外限流。
+/// 但如果 D1 完全不可用，`load_settings` 也会失败，此时同样只写日志。
+pub async fn alert_inbound_failure(
+    db: &worker::D1Database,
+    failure: InboundFailure,
+    detail: &str,
+    envelope_from: &str,
+    envelope_to: &str,
+    raw_size: f64,
+) {
+    if !failure.should_alert() {
+        return;
+    }
+
+    let settings = match crate::config::load_settings(db).await {
+        Ok(s) => s,
+        Err(e) => {
+            console_error!("[mailflare] 告警失败：无法读取推送配置 {e:?}");
+            return;
+        }
+    };
+    if !settings.telegram_enabled && !settings.bark_enabled {
+        return;
+    }
+
+    // 截断过长的错误信息，避免超出消息体上限。
+    let detail = truncate_utf8(detail.to_string(), 400);
+    let size_mb = raw_size / 1024.0 / 1024.0;
+
+    let tg_text = format!(
+        "*⚠️ MailFlare 收信告警*\n\n*类型*：{}\n*发件人*：{}\n*收件人*：{}\n*大小*：{:.2} MB\n\n*详情*：{}",
+        escape_markdown_v2(failure.label()),
+        escape_markdown_v2(envelope_from),
+        escape_markdown_v2(envelope_to),
+        size_mb,
+        escape_markdown_v2(&detail),
+    );
+    let bark_body = format!(
+        "{}\n发件人：{}\n大小：{:.2} MB\n{}",
+        failure.label(),
+        envelope_from,
+        size_mb,
+        detail
+    );
+
+    let (tg, bark) = futures_util::join!(
+        async {
+            if settings.telegram_enabled {
+                send_telegram_text(&settings, truncate_utf8(tg_text, TG_TEXT_LIMIT)).await
+            } else {
+                ChannelResult::Skipped
+            }
+        },
+        async {
+            if settings.bark_enabled {
+                send_bark_text(&settings, "⚠️ MailFlare 收信告警".to_string(), bark_body, None)
+                    .await
+            } else {
+                ChannelResult::Skipped
+            }
+        }
+    );
+
+    for (name, result) in [("telegram", &tg), ("bark", &bark)] {
+        match result {
+            ChannelResult::Failed(msg) => {
+                console_error!("[mailflare] {name} 告警推送失败：{msg}")
+            }
+            ChannelResult::Ok => console_log!("[mailflare] {name} 告警已发送：{}", failure.label()),
             ChannelResult::Skipped => {}
         }
     }

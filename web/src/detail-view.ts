@@ -201,9 +201,18 @@ function buildImageBar(handlers: DetailHandlers): HTMLElement {
 /** 沙箱 iframe。 */
 function buildIframe(html: string, allowRemoteImages: boolean): HTMLIFrameElement {
   const iframe = create("iframe", { className: "mail-html" });
-  // 关键：sandbox 里**不含** allow-scripts，脚本无法执行。
-  // allow-same-origin 只用于读取 documentElement.scrollHeight 自适应高度。
-  iframe.setAttribute("sandbox", "allow-same-origin");
+  // sandbox 取值说明（每一项都是必需的）：
+  // - allow-same-origin：只用于读 documentElement.scrollHeight 做自适应高度。
+  //   单独存在时**不会**授予脚本能力（无 allow-scripts），也无法访问父页面。
+  // - allow-popups + allow-popups-to-escape-sandbox：邮件里的 <a target="_blank">
+  //   才能在新标签页打开。缺了这两个，链接点了没反应——这是邮件客户端的基本预期。
+  // - **不含 allow-scripts**：脚本一律不执行。这是防 XSS 的核心。
+  // - **不含 allow-top-navigation**：防止邮件把整个页面导航走。
+  // - **不含 allow-forms**：防止钓鱼表单提交（另有 CSP 的 form-action 'none' 兜底）。
+  iframe.setAttribute(
+    "sandbox",
+    "allow-same-origin allow-popups allow-popups-to-escape-sandbox",
+  );
   iframe.setAttribute("referrerpolicy", "no-referrer");
   iframe.srcdoc = buildSrcdoc(html, allowRemoteImages);
 

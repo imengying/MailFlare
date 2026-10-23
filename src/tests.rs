@@ -514,3 +514,58 @@ APWXekOV6y3m1XppQYK9rmbDeFALSNgvtJ2fYot2r_Q";
         assert!(jwt::decode(b"wrong", PYTHON_TOKEN, 1_700_000_000, 30).is_err());
     }
 }
+
+#[cfg(test)]
+mod id_and_headers {
+    use crate::r2;
+
+    /// `new_id()` 的字典序必须等于时间顺序（ULID 的核心性质）。
+    ///
+    /// 这条性质决定了 D1 的 B-tree 主键索引是「只往右追加」而不是
+    /// 「到处插页」——后者会显著放大写入量。
+    #[test]
+    fn new_id_prefix_is_lexicographically_ordered() {
+        // 直接构造（不依赖时钟），验证格式本身的单调性。
+        let mk = |ms: i64, rnd: u64| format!("{:013x}{:016x}", ms, rnd);
+
+        let a = mk(1_792_731_021_365, 0xffff_ffff_ffff_ffff);
+        let b = mk(1_792_731_021_366, 0x0000_0000_0000_0000);
+        // 即使后一个随机数更小，时间戳更大的仍然排在后面。
+        assert!(b > a, "时间戳递增必须带来字典序递增：{b} vs {a}");
+
+        // 同一毫秒内由随机后缀决定，不要求有序，只要求不相等。
+        let c = mk(1_792_731_021_365, 0);
+        let d = mk(1_792_731_021_365, 1);
+        assert_ne!(c, d);
+    }
+
+    #[test]
+    fn new_id_shape_is_stable() {
+        let id = crate::util::new_id();
+        assert_eq!(id.len(), 29, "13 位时间戳 + 16 位随机数");
+        assert!(
+            id.chars().all(|c| c.is_ascii_hexdigit()),
+            "必须全部是十六进制字符：{id}"
+        );
+        // 不能含分隔符，否则会破坏 `{email_id}_{index}` 的复合 ID 约定。
+        assert!(!id.contains(['_', '-', '.']));
+    }
+
+    /// 主键必须能被附件 ID 解析器接受。
+    #[test]
+    fn new_id_is_usable_in_attachment_id() {
+        let id = crate::util::new_id();
+        let object_id = r2::attachment_object_id(&id, 3);
+        let (parsed, index) = r2::parse_attachment_id(&object_id).expect("应能解析");
+        assert_eq!(parsed, id);
+        assert_eq!(index, 3);
+    }
+
+    /// 两个连续生成的 ID 必须不同（随机后缀生效）。
+    #[test]
+    fn new_id_is_unique() {
+        let a = crate::util::new_id();
+        let b = crate::util::new_id();
+        assert_ne!(a, b);
+    }
+}

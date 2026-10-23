@@ -6,11 +6,26 @@ use worker::{Headers, Response, ResponseBuilder};
 
 /// 当前时间（毫秒 Unix 时间戳）。
 ///
-/// 用 `worker::Date` 而不是 `std::time::SystemTime`：后者在
-/// wasm32-unknown-unknown 上会 panic。
+/// 按目标平台分流：
+/// * **wasm32**：必须用 `worker::Date`（内部走 `js_sys::Date`）。
+///   `std::time::SystemTime::now()` 在 wasm32-unknown-unknown 上会 panic。
+/// * **其它目标**（本机 `cargo test` / `cargo clippy` / 未来的 native 构建）：
+///   用标准库，这样纯逻辑代码（如 `new_id`）可以在本地直接单测，
+///   不必拉起整套 Workers 运行时。
+#[cfg(target_arch = "wasm32")]
 #[inline]
 pub fn now_ms() -> i64 {
     worker::Date::now().as_millis() as i64
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+pub fn now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// 当前时间（秒）。
@@ -45,10 +60,18 @@ fn to_hex(bytes: &[u8]) -> String {
     out
 }
 
-/// 生成邮件主键：13 位十六进制毫秒时间戳 + 16 位十六进制随机数。
+/// 生成邮件主键：13 位十六进制毫秒时间戳 + 16 位十六进制随机数（共 29 字符）。
 ///
-/// 前缀是时间戳，天然按插入顺序递增，便于 D1 的主键局部性；
-/// 32 个字符全部是十六进制，不含 `-`/`.`，可以安全地参与附件复合 ID。
+/// 这是 **ULID 的核心思想**：用定宽、大端、十六进制的时间戳做前缀，
+/// 因此字符串字典序 == 时间顺序。好处是 SQLite 的 B-tree 主键索引
+/// 只在最右端追加，不会因为随机主键到处插页造成写放大。
+///
+/// * 13 位十六进制可表示到 `0xFFFFFFFFFFFFF`，约公元 44680 年；
+/// * 116 位随机性（16 hex = 64 bit）在单用户场景下碰撞概率可忽略；
+/// * 全部字符为 `[0-9a-f]`，不含 `-`/`.`/`_`，可以安全参与附件复合 ID。
+///
+/// 与标准 ULID 的区别：没有做 Crockford Base32（用更简单的 hex），
+/// 也不保证同一毫秒内单调递增（随机后缀）。对本场景足够。
 pub fn new_id() -> String {
     let mut rnd = [0u8; 8];
     random_bytes(&mut rnd);

@@ -293,6 +293,8 @@ wrangler d1 execute mailflare --local --file=./schema.sql
 | 原始 `.eml` 写失败 | 只记日志，不影响邮件 |
 | 解析失败 | `set_reject` 让发信方感知 |
 | 推送失败 | 只记日志（`console_error`），绝不影响收信 |
+| 邮件超大 / 解析失败 / D1·R2 异常 | **推送告警到 TG/Bark**（`waitUntil` 异步，不阻塞 SMTP），避免静默丢信 |
+| 重复投递 | 不告警（SMTP 重试是预期行为） |
 | 删除邮件 | 先删 D1 再删 R2（避免出现「列表有、点开 404」） |
 
 ---
@@ -329,7 +331,11 @@ TypeScript 只能保证前端内部一致，**跨语言契约靠人工同步**�
 
 邮件 HTML 是**完全不可信**的第三方内容，渲染时有三道独立防线：
 
-1. `sandbox="allow-same-origin"` 的 iframe（**不含** `allow-scripts`）
+1. `sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"` 的 iframe
+   —— **不含** `allow-scripts`（防 XSS）、**不含** `allow-top-navigation`（防页面被劫持）、
+   **不含** `allow-forms`（防钓鱼表单）。`allow-popups*` 是必需的，否则邮件里的
+   链接点了没反应。配合给所有 `<a>` 注入 `rel="noopener noreferrer"`，
+   即使新标签页脱离了沙箱也拿不到 `opener` 句柄。
 2. `srcdoc` 内嵌 CSP：`default-src 'none'`、`form-action 'none'`
 3. 默认 `img-src 'self' data:`，拦掉远程图片（防追踪像素泄露 IP），
    用户点「显示图片」才放开
@@ -343,12 +349,13 @@ TypeScript 只能保证前端内部一致，**跨语言契约靠人工同步**�
 
 ```bash
 # 后端
-cargo test                                      # 30 个测试
+cargo test                                      # 34 个测试
 cargo clippy --all-targets --target wasm32-unknown-unknown   # 零警告
 worker-build --release                          # wasm ~1016KB（gzip 后 ~434KB）
 
 # 前端
 bun run check                                   # tsc 严格模式零错误
+bun run check:render                            # 渲染安全自检（27 项断言）
 bun run build                                   # 内联产物 ~17KB JS
 ```
 
