@@ -1,0 +1,51 @@
+[package]
+name = "mailflare"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "MailFlare — 极简单用户邮件管理系统（Cloudflare Workers + D1 + R2）"
+license = "MIT"
+
+[lib]
+# Workers 需要 cdylib；保留 rlib 便于本地 `cargo test` / clippy。
+crate-type = ["cdylib"]
+
+[dependencies]
+# workers-rs：开启 d1 feature 才能使用 Env::d1 / D1Database。
+worker = { version = "0.8.7", features = ["d1"] }
+# mail-parser：零拷贝 MIME 解析；full_encoding 启用 encoding_rs，
+# 才能正确解码 GBK / GB2312 / GB18030 / Big5 等中文编码。
+mail-parser = { version = "0.11.9", features = ["full_encoding"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+# JWT 只需 HS256 对称签名，用 hmac + sha2 + base64 自己实现（见 src/jwt.rs）。
+# 这样不必拖进 rsa/p256/p384/ed25519 一整套非对称实现，
+# 也就没有 jsonwebtoken 对 getrandom 的传递依赖。
+hmac = "0.13.0"
+# sha2 同时用于 HMAC-SHA256 与管理员密码的定长摘要比较。
+sha2 = "0.11.1"
+base64 = "0.23.1"
+# join! 用于并发推送 Telegram / Bark。
+futures-util = "0.3"
+# 只在 URL 解析/编码时使用；worker 也 re-export 了 url。
+# 这里显式声明是为了 version 与 worker 内部保持一致，避免重复编译。
+url = "2.5.8"
+# 生成邮件主键、Turnstile 幂等键用的随机数。
+# 非 wasm 目标（`cargo check` / 单元测试）走系统熵源，
+# wasm32 走 WebCrypto（需要显式启用 `wasm_js` feature）。
+getrandom = "0.4.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# getrandom 0.4 在 wasm32 上必须显式选择后端，否则直接 compile_error。
+getrandom = { version = "0.4.3", features = ["wasm_js"] }
+
+[profile.release]
+opt-level = "s"   # 以体积优先，兼顾速度
+lto = true
+codegen-units = 1
+# 切勿开启 `strip = true`：wasm-bindgen 生成 catch wrapper 时需要 wasm 里的
+# 符号/名称信息，剥离后 worker-build 会报
+# "externref table required for catch wrappers" 并中断构建。
+# 最终体积由 wasm-opt 负责优化，不需要 Rust 侧 strip。
+debug = false
+

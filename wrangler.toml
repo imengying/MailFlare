@@ -1,0 +1,117 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "mailflare"
+# 使用 Workers 新构建系统（wrangler 3.x+ 推荐）。
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-01-01"
+workers_dev = true
+
+# ---------------------------------------------------------------------------
+# 构建：worker-build 会把 Rust 编译成 wasm 并生成 build/worker/shim.mjs
+# ---------------------------------------------------------------------------
+[build]
+# 两步：bun 先构建 TypeScript 前端（产物内联进 public/index.html），
+# 再由 worker-build 把 Rust 编成 wasm 并生成 build/worker/shim.mjs。
+#
+# 前端用 bun（不依赖 npm）：`bun run build` 内部调用 Bun.build 打包，
+# 不需要额外的打包器依赖。
+#
+# 首次部署前先装好工具：
+#   cargo install worker-build --version 0.8.7 --locked
+#   bun install
+command = "bun run build && worker-build --release"
+
+# ---------------------------------------------------------------------------
+# D1：邮件元数据 + 动态配置
+# 首次部署前先创建再回填 database_id：
+#   wrangler d1 create mailflare
+# ---------------------------------------------------------------------------
+[[d1_databases]]
+binding = "DB"
+database_name = "mailflare"
+# 本地 `wrangler dev` 会自动用它创建 .wrangler/state 下的 SQLite。
+database_id = "00000000-0000-0000-0000-000000000000"
+
+# ---------------------------------------------------------------------------
+# R2：原始 .eml 与附件
+#   wrangler r2 bucket create mailflare-mail
+# ---------------------------------------------------------------------------
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "mailflare-mail"
+
+# ---------------------------------------------------------------------------
+# 静态资源：单页前端
+# Workers Static Assets 会先于 Worker 处理匹配的静态文件；`binding = "ASSETS"`
+# 允许在 Worker 内部通过 env.assets("ASSETS") 转发（我们需要它来把 SPA 路由
+# 回落到 index.html，同时让 /api/* 继续走 Rust）。
+# ---------------------------------------------------------------------------
+[assets]
+directory = "./public"
+binding = "ASSETS"
+# 所有请求先经过 Worker：
+#   /api/*      -> Rust 处理
+#   其它路径    -> 由 src/lib.rs 转发给 ASSETS（边缘侧直接返回，不经过 Rust 逻辑）
+#
+# 为什么不写成 `run_worker_first = ["/api/*"]`：数组形式的支持依赖较新的
+# wrangler 版本；一旦被忽略，SPA 的 not_found_handling 会把不存在的 `/api/...`
+# 也回成 index.html，前端拿到的就不是 JSON 了。布尔形式在所有支持 [assets]
+# 的版本上都可用，行为最可预测。
+run_worker_first = true
+# 未知路径（前端路由，如 /settings）回落到 index.html。
+not_found_handling = "single-page-application"
+
+# ---------------------------------------------------------------------------
+# 环境变量（非敏感）
+# 敏感项请用 `wrangler secret put`，不要写在这里：
+#   wrangler secret put ADMIN_PASSWORD
+#   wrangler secret put JWT_SECRET
+#   wrangler secret put TURNSTILE_SECRET
+# ---------------------------------------------------------------------------
+[vars]
+# Turnstile 的 site key 是公开值，会下发给前端渲染挂件；留空则前端隐藏验证框。
+TURNSTILE_SITE_KEY = ""
+# 可选：限制 Turnstile token 只能在指定 hostname 上使用。
+TURNSTILE_HOSTNAME = ""
+
+# 可选：前端与后端不同源部署时填写前端来源，例如 "https://mail.example.com"。
+# 同源部署留空即可。
+ALLOWED_ORIGIN = ""
+
+# 可选：站点对外地址，用于在 Telegram/Bark 消息里拼「查看详情」链接。
+# 留空时退回 ALLOWED_ORIGIN；都为空则消息里不带链接。
+PUBLIC_URL = ""
+
+# JWT 有效期（秒），默认 7 天。
+JWT_TTL_SECS = "604800"
+
+# 原始 .eml 是否保存到 R2（"0" 关闭）。
+STORE_RAW_EML = "1"
+
+# 单封邮件正文入库上限（字节），超出部分截断。默认 256KB。
+MAX_BODY_BYTES = "262144"
+# 单封邮件整体大小上限（字节），超过直接 SMTP 拒收。默认 20MB。
+MAX_MESSAGE_BYTES = "20971520"
+# 单个附件转存 R2 的上限（字节）。默认 10MB。
+MAX_ATTACHMENT_BYTES = "10485760"
+# 附件并发上传度。
+R2_CONCURRENCY = "4"
+# 列表默认/最大分页大小。
+PAGE_SIZE_DEFAULT = "20"
+PAGE_SIZE_MAX = "100"
+
+# ---------------------------------------------------------------------------
+# 收信：Cloudflare Email Routing 指向本 Worker 后会自动触发 email 事件。
+# 绑定关系在 Cloudflare 控制台（Email Routing -> 路由规则 -> Send to Worker）配置，
+# 也可以在这里声明（需要先在控制台启用 Email Routing）：
+# ---------------------------------------------------------------------------
+# [[send_email]]
+# name = "MAILER"
+#
+# [env.production]
+# name = "mailflare-prod"
+# routes = [{ pattern = "mail.example.com/*", zone_name = "example.com" }]
+
+# 本地开发时的可观测性
+[observability]
+enabled = true
+head_sampling_rate = 1

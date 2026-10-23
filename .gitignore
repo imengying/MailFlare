@@ -1,0 +1,14 @@
+# Rust
+/target
+/build
+
+# Wrangler
+/.wrangler
+.dev.vars
+
+# 前端构建产物：由 `bun run build` 从 web/index.template.html 生成。
+# 提交源码模板即可，避免每次改 TS 都产生一大坨 diff。
+/public/index.html
+
+# bun（lockfile 要提交，保证依赖可复现）
+node_modules

@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>MailFlare</title>
+<style>
+  /* ---------- 设计变量 ---------- */
+  :root {
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --surface-2: #f1f3f6;
+    --border: #e3e6ec;
+    --text: #14161a;
+    --text-dim: #6b7280;
+    --text-faint: #9aa1ad;
+    --accent: #2f6bff;
+    --accent-soft: #eaf0ff;
+    --danger: #d7263d;
+    --ok: #128a5b;
+    --radius: 12px;
+    --shadow: 0 1px 2px rgba(16,24,40,.04), 0 8px 24px -12px rgba(16,24,40,.12);
+    --sidebar-w: 232px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1116;
+      --surface: #151920;
+      --surface-2: #1b202a;
+      --border: #262d38;
+      --text: #e8ebf0;
+      --text-dim: #9aa4b2;
+      --text-faint: #6b7684;
+      --accent: #6d9bff;
+      --accent-soft: #1c2740;
+      --danger: #ff6b7f;
+      --ok: #3ecf8e;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px -16px rgba(0,0,0,.6);
+    }
+  }
+
+  /* ---------- 基础 ---------- */
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, textarea, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+  [hidden] { display: none !important; }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 8px 14px; border-radius: 9px; border: 1px solid var(--border);
+    background: var(--surface); font-weight: 500; transition: background .15s, border-color .15s;
+    white-space: nowrap;
+  }
+  .btn:hover { background: var(--surface-2); }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
+  .btn.primary:hover { filter: brightness(1.06); }
+  .btn.danger { color: var(--danger); }
+  .btn.ghost { background: transparent; border-color: transparent; }
+  .btn.ghost:hover { background: var(--surface-2); }
+  .btn.sm { padding: 5px 10px; font-size: 13px; border-radius: 8px; }
+
+  .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+  .field > label { font-size: 13px; font-weight: 600; color: var(--text-dim); }
+  .field .hint { font-size: 12px; color: var(--text-faint); }
+  .input {
+    width: 100%; padding: 9px 12px; border-radius: 9px;
+    border: 1px solid var(--border); background: var(--surface);
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .switch { display: flex; align-items: center; gap: 10px; }
+  .switch input { width: 38px; height: 22px; appearance: none; background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 99px; position: relative; transition: background .15s; }
+  .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    border-radius: 50%; background: var(--text-faint); transition: transform .15s, background .15s; }
+  .switch input:checked { background: var(--accent-soft); border-color: var(--accent); }
+  .switch input:checked::after { transform: translateX(16px); background: var(--accent); }
+
+  /* ---------- 登录 ---------- */
+  #login-view {
+    min-height: 100%; display: grid; place-items: center; padding: 24px;
+    background:
+      radial-gradient(1000px 500px at 50% -10%, var(--accent-soft), transparent 70%),
+      var(--bg);
+  }
+  .login-card {
+    width: min(400px, 100%); background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; padding: 28px; box-shadow: var(--shadow);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-size: 19px; font-weight: 700; letter-spacing: -.2px; }
+  .brand .logo {
+    width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+    background: linear-gradient(140deg, var(--accent), #8b5cf6); color: #fff; font-size: 15px;
+  }
+  .login-card .brand { margin-bottom: 6px; }
+  .login-sub { color: var(--text-dim); font-size: 13px; margin: 0 0 22px; }
+  .err { color: var(--danger); font-size: 13px; min-height: 18px; margin: 4px 0 10px; }
+
+  /* ---------- 应用布局 ---------- */
+  #app-view { display: grid; grid-template-columns: var(--sidebar-w) 1fr; height: 100dvh; }
+  aside {
+    border-right: 1px solid var(--border); background: var(--surface);
+    display: flex; flex-direction: column; padding: 16px 12px; gap: 6px; min-height: 0;
+  }
+  aside .brand { padding: 4px 8px 14px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 9px;
+    border: none; background: transparent; text-align: left; width: 100%; color: var(--text-dim);
+    font-weight: 500;
+  }
+  .nav-item:hover { background: var(--surface-2); color: var(--text); }
+  .nav-item.active { background: var(--accent-soft); color: var(--accent); }
+  .nav-item .count {
+    margin-left: auto; font-size: 12px; background: var(--accent); color: #fff;
+    padding: 1px 7px; border-radius: 99px; min-width: 20px; text-align: center;
+  }
+  aside .spacer { flex: 1; }
+  .storage-note { font-size: 11.5px; color: var(--text-faint); padding: 0 10px 8px; line-height: 1.5; }
+
+  main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
+  .toolbar {
+    display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+    border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0;
+  }
+  .toolbar .title { font-weight: 650; font-size: 15px; }
+  .toolbar .grow { flex: 1; }
+  .search {
+    position: relative; flex: 0 1 300px;
+  }
+  .search input { padding-left: 32px; }
+  .search::before {
+    content: "⌕"; position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+    color: var(--text-faint); font-size: 15px; pointer-events: none;
+  }
+
+  .split { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; flex: 1; min-height: 0; }
+  .list-pane { border-right: 1px solid var(--border); overflow: auto; background: var(--surface); min-height: 0; }
+  .detail-pane { overflow: auto; min-height: 0; display: flex; flex-direction: column; }
+
+  .mail-item {
+    display: block; width: 100%; text-align: left; border: none; background: transparent;
+    padding: 12px 16px; border-bottom: 1px solid var(--border); color: inherit;
+    position: relative; transition: background .12s;
+  }
+  .mail-item:hover { background: var(--surface-2); }
+  .mail-item.selected { background: var(--accent-soft); }
+  .mail-item.selected::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent);
+  }
+  .mail-item .row1 { display: flex; align-items: baseline; gap: 8px; }
+  .mail-item .from { font-weight: 600; font-size: 13.5px; flex: 1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mail-item .when { font-size: 11.5px; color: var(--text-faint); flex-shrink: 0; }
+  .mail-item .subj { font-size: 13px; margin-top: 3px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .mail-item .snippet { font-size: 12.5px; color: var(--text-faint); margin-top: 3px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mail-item.unread .from, .mail-item.unread .subj { font-weight: 700; }
+  .mail-item.unread .from::before {
+    content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent); margin-right: 6px; vertical-align: middle;
+  }
+  .clip { color: var(--text-faint); font-size: 11px; }
+
+  .empty { padding: 56px 24px; text-align: center; color: var(--text-faint); }
+  .empty .big { font-size: 30px; margin-bottom: 8px; opacity: .7; }
+
+  .detail-head { padding: 18px 22px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .detail-subject { font-size: 18px; font-weight: 650; line-height: 1.35; margin: 0 0 10px; word-break: break-word; }
+  .meta-line { font-size: 12.5px; color: var(--text-dim); display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  .meta-line b { color: var(--text); font-weight: 600; }
+  .detail-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+
+  .tabs { display: flex; gap: 4px; padding: 10px 22px 0; }
+  .tab {
+    padding: 6px 12px; border-radius: 8px 8px 0 0; border: 1px solid transparent;
+    border-bottom: none; background: transparent; font-size: 13px; color: var(--text-dim);
+  }
+  .tab.active { background: var(--surface); border-color: var(--border); color: var(--text); font-weight: 600; }
+
+  .body-wrap { padding: 0 22px 32px; }
+  .body-scroll {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 0 var(--radius) var(--radius) var(--radius);
+    padding: 20px; min-height: 200px;
+  }
+  .text-body { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.7; margin: 0; }
+  /* 邮件 HTML 一律放进 sandbox iframe，彻底隔离脚本 */
+  iframe.mail-html {
+    width: 100%; border: 1px solid var(--border); border-radius: var(--radius);
+    background: #fff; min-height: 420px; display: block;
+  }
+
+  .attachments { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .att {
+    display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px;
+    border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2);
+    max-width: 100%; font-size: 12.5px;
+  }
+  .att a { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+  .att .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+  .att .size { color: var(--text-faint); font-size: 11px; flex-shrink: 0; }
+  .att.missing { opacity: .6; }
+
+  .imgbar {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 8px 12px; margin-bottom: 10px; font-size: 12.5px;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px;
+    color: var(--text-dim);
+  }
+  .imgbar button { margin-left: auto; }
+
+  /* ---------- 设置抽屉 ---------- */
+  .drawer-mask {
+    position: fixed; inset: 0; background: rgba(8,10,14,.42); backdrop-filter: blur(2px);
+    display: grid; place-items: center; padding: 24px; z-index: 30;
+  }
+  .drawer {
+    width: min(560px, 100%); max-height: min(760px, 90dvh); overflow: auto;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    padding: 22px; box-shadow: var(--shadow);
+  }
+  .drawer h2 { margin: 0 0 4px; font-size: 17px; }
+  .drawer .sub { color: var(--text-dim); font-size: 12.5px; margin: 0 0 18px; }
+  .group { border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
+  .group h3 { margin: 0 0 12px; font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
+  .row-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+
+  /* ---------- Toast ---------- */
+  #toast {
+    position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(10px);
+    background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 999px;
+    font-size: 13px; box-shadow: var(--shadow); opacity: 0; pointer-events: none;
+    transition: opacity .18s, transform .18s; z-index: 60; max-width: min(480px, 90vw);
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  .skeleton { background: linear-gradient(90deg, var(--surface-2) 25%, var(--border) 37%, var(--surface-2) 63%);
+    background-size: 400% 100%; animation: sk 1.3s ease infinite; border-radius: 8px; }
+  @keyframes sk { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+
+  /* ---------- 移动端 ---------- */
+  @media (max-width: 860px) {
+    #app-view { grid-template-columns: 1fr; }
+    aside {
+      position: fixed; inset: 0; z-index: 20; border-right: none;
+      transform: translateX(-100%); transition: transform .2s ease;
+    }
+    aside.open { transform: translateX(0); }
+    .split { grid-template-columns: 1fr; }
+    .list-pane { border-right: none; }
+    /* 移动端是「列表 / 详情」二选一：靠 #app-view 上的 .showing 类切换。 */
+    #app-view .list-pane,
+    #app-view .detail-pane { display: none; }
+    #app-view:not(.showing) .list-pane { display: block; }
+    #app-view.showing .detail-pane { display: flex; }
+    .menu-btn { display: inline-flex !important; }
+  }
+  .menu-btn { display: none; }
+</style>
+</head>
+<body>
+
+<!-- ======================= 登录 ======================= -->
+<section id="login-view">
+  <form class="login-card" id="login-form" autocomplete="on">
+    <div class="brand"><span class="logo">✉</span> MailFlare</div>
+    <p class="login-sub">输入管理员密码以访问你的邮箱</p>
+
+    <div class="field">
+      <label for="password">管理员密码</label>
+      <input class="input" id="password" name="password" type="password"
+             autocomplete="current-password" required placeholder="••••••••">
+    </div>
+
+    <div class="field" id="turnstile-field" hidden>
+      <label>人机验证</label>
+      <!-- Turnstile 会把挂件渲染到这个容器里 -->
+      <div id="turnstile-container"></div>
+    </div>
+
+    <p class="err" id="login-err" role="alert"></p>
+    <button class="btn primary" id="login-btn" type="submit" style="width:100%">登 录</button>
+  </form>
+</section>
+
+<!-- ======================= 主界面 ======================= -->
+<div id="app-view" hidden>
+  <aside id="sidebar">
+    <div class="brand"><span class="logo">✉</span> MailFlare</div>
+    <button class="nav-item active" data-filter="all">
+      <span>📥</span> 全部邮件 <span class="count" id="count-unread" hidden></span>
+    </button>
+    <button class="nav-item" data-filter="unread">
+      <span>🔵</span> 未读
+    </button>
+    <button class="nav-item" id="open-settings"><span>⚙️</span> 通知设置</button>
+    <div class="spacer"></div>
+    <p class="storage-note">邮件正文截断入库，原始 .eml 与附件存放在 R2。</p>
+    <button class="nav-item" id="logout"><span>↩</span> 退出登录</button>
+  </aside>
+
+  <main>
+    <div class="toolbar">
+      <button class="btn ghost menu-btn" id="toggle-sidebar" aria-label="菜单">☰</button>
+      <span class="title" id="list-title">全部邮件</span>
+      <div class="grow"></div>
+      <div class="search"><input class="input" id="search" type="search" placeholder="搜索当前列表…"></div>
+      <button class="btn sm" id="mark-all-read" title="全部标为已读">全部已读</button>
+      <button class="btn sm" id="refresh" title="刷新">↻</button>
+    </div>
+
+    <div class="split">
+      <div class="list-pane" id="list-pane"></div>
+      <div class="detail-pane" id="detail-pane">
+        <div class="empty"><div class="big">✉</div>选择左侧的一封邮件查看内容</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ======================= 设置抽屉 ======================= -->
+<div class="drawer-mask" id="settings-mask" hidden>
+  <form class="drawer" id="settings-form">
+    <h2>通知设置</h2>
+    <p class="sub">新邮件到达时异步推送到 Telegram / Bark，不影响收信速度。</p>
+
+    <div class="group">
+      <h3>Telegram</h3>
+      <div class="switch" style="margin-bottom:12px">
+        <input type="checkbox" id="tg-enabled">
+        <label for="tg-enabled">启用 Telegram 推送</label>
+      </div>
+      <div class="field">
+        <label for="tg-token">Bot Token</label>
+        <input class="input" id="tg-token" type="password" autocomplete="off"
+               placeholder="123456:ABC-DEF...">
+        <span class="hint" id="tg-token-hint"></span>
+      </div>
+      <div class="field">
+        <label for="tg-chat">Chat ID</label>
+        <input class="input" id="tg-chat" autocomplete="off" placeholder="123456789">
+        <span class="hint">私聊给你自己的 ID，或群组/频道的 <code>-100…</code> ID。</span>
+      </div>
+    </div>
+
+    <div class="group">
+      <h3>Bark</h3>
+      <div class="switch" style="margin-bottom:12px">
+        <input type="checkbox" id="bark-enabled">
+        <label for="bark-enabled">启用 Bark 推送</label>
+      </div>
+      <div class="field">
+        <label for="bark-server">服务地址</label>
+        <input class="input" id="bark-server" autocomplete="off" placeholder="https://api.day.app">
+      </div>
+      <div class="field">
+        <label for="bark-key">Device Key</label>
+        <input class="input" id="bark-key" type="password" autocomplete="off" placeholder="设备 Key">
+        <span class="hint" id="bark-key-hint"></span>
+      </div>
+    </div>
+
+    <p class="err" id="settings-err" role="alert"></p>
+    <div class="row-actions">
+      <button class="btn" type="button" id="settings-cancel">取消</button>
+      <button class="btn primary" type="submit" id="settings-save">保存</button>
+    </div>
+  </form>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+<!-- APP_SCRIPT_START -->
+<!-- APP_SCRIPT_END -->
+</body>
+</html>

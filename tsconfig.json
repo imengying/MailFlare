@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    // 直接产物交给浏览器，无需降级：现代浏览器都支持 ES2022。
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // bun 全局（Bun.write / Bun.file 等）与 Node 兼容 API。
+    "types": ["bun"],
+
+    // 严格性：这是一次性写完的小项目，全开反而更快收敛。
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+    // Bun 运行时要求 import 写明 .ts 后缀。
+    "allowImportingTsExtensions": true,
+
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["web/src/**/*.ts", "scripts/**/*.ts"]
+}
