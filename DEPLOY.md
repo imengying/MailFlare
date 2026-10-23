@@ -1,34 +1,37 @@
 # 部署指南（Cloudflare 网页控制台 + GitHub）
 
-全部在 Cloudflare 网页上完成，不需要本地装 wrangler。
+全部在 Cloudflare 网页上完成，不需要本地装 Rust 或 wrangler。
 适合「连 GitHub → 填参数 → 点部署」的流程。
+
+> 本项目参考了同目录下 `bark-worker` 与 `ImgFlare` 的云端构建实践。
 
 ---
 
 ## 0. 前置条件
 
-- GitHub 仓库已推送（本项目已推到 `imengying/MailFlare`）
+- GitHub 仓库已推送
 - Cloudflare 账号已添加你的域名（Email Routing 需要）
-- **不要**把任何密钥写进仓库——下面全部通过控制台的 Secret 设置
+
+**不要**把任何密钥写进仓库——全部通过控制台的 Secret 设置。
 
 ---
 
 ## 1. 创建 D1 数据库
 
-控制台 → **Workers & Pages** → 左侧 **D1 SQL Database** → **Create**
+控制台 → **Workers & Pages** → **D1 SQL Database** → **Create**
 
 | 项 | 值 |
 |---|---|
 | Name | `mailflare` |
-| Location | 就近选（如 APAC） |
+| Location | 就近选 |
 
-创建后复制 **Database ID**（形如 `a1b2c3d4-...`），下一步要用。
+创建后复制 **Database ID**（形如 `a1b2c3d4-...`）。
 
 ### 1.1 初始化表结构
 
-进入刚创建的数据库 → **Console** 标签页，粘贴 `schema.sql` 全部内容后执行。
+进入数据库 → **Console** 标签页，粘贴 `schema.sql` 全部内容后执行。
 
-或者用 **Execute** 面板逐条跑。执行完在 Console 里验证：
+验证：
 
 ```sql
 SELECT name FROM sqlite_master WHERE type='table';
@@ -44,10 +47,8 @@ SELECT name FROM sqlite_master WHERE type='table';
 | 项 | 值 |
 |---|---|
 | Bucket name | `mailflare-mail` |
-| Location | 就近选 |
 
-> R2 需要先在账号里**启用**（要绑支付方式，但有免费额度）。
-> 附件与原始 `.eml` 都存这里。
+> R2 需要先在账号里启用（要绑支付方式，有免费额度）。
 
 ---
 
@@ -55,48 +56,49 @@ SELECT name FROM sqlite_master WHERE type='table';
 
 控制台 → **Workers & Pages** → **Create** → **Workers** → **Connect to Git**
 
-1. 授权 GitHub，选择 `imengying/MailFlare` 仓库
-2. 分支选 `main`
-3. 构建设置：
+1. 选择本仓库，分支 `main`，Root directory `/`
+2. 构建配置：
 
 | 项 | 值 |
 |---|---|
-| Build command | 留空（由 `wrangler.toml` 的 `[build].command` 接管） |
-| Deploy command | `npx wrangler deploy` |
-| Root directory | `/` |
+| Build command | `bun run build` |
+| Deploy command | `bunx wrangler deploy` |
+| Build variable | `BUN_VERSION=1.4.3` |
 
-> **为什么不填 Build command**：`wrangler deploy` 会读取 `wrangler.toml` 里的
-> `[build].command` 并在云端执行它。这样本地和云端用同一套构建逻辑，
-> 不会出现「本地能构建、云端不行」。
+> **Build variable 放在 Settings → Build → Build variables and secrets**，
+> 只在构建期可见，不会进入运行时。Bun 版本固定可避免上游更新导致行为漂移。
 
 ### 3.1 关于云端构建 Rust
 
-Cloudflare 的构建镜像**内置 Rust 与 wasm32 target**，但没有 `worker-build`。
-`wrangler.toml` 里的构建命令已经包含：
+Cloudflare 的构建镜像**没有预装 Rust 工具链，也没有 `pkg-config`**。
 
-```
-rustup target add wasm32-unknown-unknown &&
-cargo install worker-build --version 0.8.7 --locked &&
-bun install &&
-bun run build &&
-worker-build --release
-```
+`bun run build` 会执行 `scripts/build.sh`，由它负责：
 
-首次构建大约 3–5 分钟（`cargo install` 要编译 worker-build），
-之后会命中构建缓存，约 1–2 分钟。
+| 步骤 | 说明 |
+|---|---|
+| 检查产物新鲜度 | 已构建且源文件未变时直接跳过（一次部署可能调用两次） |
+| 安装 Rust | 通过 rustup 官方脚本，`--profile minimal`（首次约 1 分钟） |
+| 添加 wasm32 target | `rustup target add wasm32-unknown-unknown` |
+| 绕开 pkg-config | 显式设置 `OPENSSL_INCLUDE_DIR` / `OPENSSL_LIB_DIR` |
+| 安装 worker-build | `cargo install worker-build --version 0.8.7 --locked`（首次 3–5 分钟） |
+| 构建前端 | `bun install --frozen-lockfile && bun run build:frontend` |
+| 编译 wasm | `worker-build --release` |
 
-> 如果云端构建报「找不到 cargo / rustup」：在 Worker 的
-> **Settings → Build → Build variables** 里确认没有覆盖 `PATH`，
-> 并检查构建日志开头的工具链版本。Cloudflare 偶尔会调整镜像，
-> 届时可在 Build command 里显式加 `rustup default stable`。
+首次部署约 5–7 分钟，之后命中构建缓存约 2 分钟。
+
+> **为什么必须先装 Rust**：镜像里 `cargo`/`rustup` 都不存在，
+> 构建命令直接写 `cargo install ...` 会以 `command not found` 失败。
+
+> **为什么要设 OpenSSL 路径**：`worker-build` 的依赖链里有 `openssl-sys`，
+> 它默认用 `pkg-config` 探测。镜像没有 pkg-config，探测会 panic。
 
 ---
 
 ## 4. 绑定 D1 与 R2
 
-Worker → **Settings** → **Bindings**（或 **Functions → Bindings**）
+Worker → **Settings** → **Bindings**
 
-### 4.1 D1 绑定
+### 4.1 D1
 
 **Add** → **D1 database**
 
@@ -105,16 +107,16 @@ Worker → **Settings** → **Bindings**（或 **Functions → Bindings**）
 | Variable name | `DB` |
 | D1 database | 选第 1 步创建的 `mailflare` |
 
-### 4.2 R2 绑定
+### 4.2 R2
 
 **Add** → **R2 bucket**
 
 | 项 | 值 |
 |---|---|
 | Variable name | `R2` |
-| R2 bucket | 选第 2 步创建的 `mailflare-mail` |
+| R2 bucket | 选 `mailflare-mail` |
 
-> 名字必须是 `DB` 和 `R2` —— 代码里按这两个名字取绑定。
+> 名字**必须**是 `DB` 和 `R2` —— 代码按这两个名字取绑定。
 
 ---
 
@@ -122,43 +124,33 @@ Worker → **Settings** → **Bindings**（或 **Functions → Bindings**）
 
 Worker → **Settings** → **Variables and Secrets**
 
-### 5.1 必填（选 **Secret** 类型，加密存储）
-
-点 **Add** → 类型选 **Secret**：
+### 5.1 必填（类型选 **Secret**）
 
 | Name | 值 |
 |---|---|
-| `ADMIN_PASSWORD` | 你的管理员密码（建议 16 位以上） |
-| `JWT_SECRET` | 随机串，生成方法见下 |
+| `ADMIN_PASSWORD` | 管理员密码（16 位以上） |
+| `JWT_SECRET` | `openssl rand -base64 48` 或 `openssl rand -hex 32` |
 
-生成 `JWT_SECRET`（任选其一）：
+> `JWT_SECRET` 生成一次后**保持不变**。修改它会让所有已登录会话失效。
 
-```bash
-openssl rand -base64 48
-```
-或用浏览器控制台：
-```js
-crypto.getRandomValues(new Uint8Array(48)).join('')
-```
-
-### 5.2 推荐（Secret）
+### 5.2 推荐（类型选 **Secret**）
 
 | Name | 值 |
 |---|---|
-| `TURNSTILE_SECRET` | Turnstile 的 Secret Key，见第 6 步 |
+| `TURNSTILE_SECRET` | Turnstile Secret Key（见第 6 步） |
 
-> 留空则跳过人机验证。**生产环境务必设置**，否则登录接口只有密码一道防线。
+> 留空则**跳过人机验证**。生产环境务必设置，否则登录只有密码一道防线。
 
-### 5.3 普通变量（**Plaintext** 类型）
+### 5.3 普通变量（**Plaintext**）
 
-这些在 `wrangler.toml` 的 `[vars]` 里已有默认值，控制台设置会覆盖。
+`wrangler.toml` 的 `[vars]` 已有默认值，控制台设置会覆盖。
 
-| Name | 示例 | 说明 |
-|---|---|---|
-| `TURNSTILE_SITE_KEY` | `0x4AAA...` | Turnstile 公开 site key，前端用来渲染挂件 |
-| `PUBLIC_URL` | `https://mail.example.com` | 推送消息里「查看详情」链接的地址 |
+| Name | 示例 |
+|---|---|
+| `TURNSTILE_SITE_KEY` | `0x4AAA...` |
+| `PUBLIC_URL` | `https://mail.example.com` |
 
-其余变量（`MAX_BODY_BYTES`、`R2_CONCURRENCY` 等）保持默认即可。
+其余（`MAX_BODY_BYTES`、`R2_CONCURRENCY` 等）保持默认即可。
 
 ---
 
@@ -168,34 +160,29 @@ crypto.getRandomValues(new Uint8Array(48)).join('')
 
 | 项 | 值 |
 |---|---|
-| Widget name | `MailFlare` |
-| Hostnames | 你的 Worker 域名，如 `mailflare.xxx.workers.dev` 和自定义域名 |
+| Hostnames | Worker 域名 + 自定义域名 |
 | Widget Mode | **Managed** |
 
-创建后会给出两个值：
-
-- **Site Key** → 填到第 5.3 步的 `TURNSTILE_SITE_KEY`
-- **Secret Key** → 填到第 5.2 步的 `TURNSTILE_SECRET`
+- **Site Key** → 填第 5.3 步的 `TURNSTILE_SITE_KEY`
+- **Secret Key** → 填第 5.2 步的 `TURNSTILE_SECRET`
 
 ---
 
 ## 7. 部署
 
-回到 Worker 的 **Deployments** 页面，点 **Deploy**（或推送一次 commit 触发）。
-
-首次部署成功后，访问 Worker 域名，应该看到登录页。
+点 **Deploy**（或推送 commit 触发）。成功后访问 Worker 域名，应看到登录页。
 
 ### 7.1 自检
 
 | 检查项 | 方法 | 预期 |
 |---|---|---|
-| API 活着 | 访问 `/api/health` | `{"ok":true,"data":{"service":"mailflare",...}}` |
-| 前端加载 | 访问 `/` | 出现登录页，无 JS 报错 |
-| Turnstile | 登录页 | 出现人机验证框（若配了 secret） |
+| API 活着 | `/api/health` | `{"ok":true,"data":{"service":"mailflare",...}}` |
+| 前端加载 | `/` | 登录页，无 JS 报错 |
+| Turnstile | 登录页 | 出现验证框（若配了 secret） |
 | 登录 | 输入密码 | 进入邮件列表 |
 
-如果 `/api/health` 返回 500，多半是 `ADMIN_PASSWORD` 或 `JWT_SECRET` 没设。
-错误信息里会明确指出缺哪个变量。
+`/api/health` 返回 500 多半是 `ADMIN_PASSWORD` 或 `JWT_SECRET` 没设，
+错误信息会指明缺哪个。
 
 ---
 
@@ -203,11 +190,11 @@ crypto.getRandomValues(new Uint8Array(48)).join('')
 
 控制台 → 你的域名 → **Email** → **Email Routing**
 
-### 8.1 启用 Email Routing
+### 8.1 启用
 
-首次使用需点 **Enable**，按提示添加 MX 与 TXT 记录（Cloudflare 会自动加）。
+首次需点 **Enable**，按提示添加 MX 与 TXT 记录（Cloudflare 自动加）。
 
-### 8.2 添加路由规则
+### 8.2 添加路由
 
 **Routing rules** → **Custom addresses** → **Create address**
 
@@ -215,58 +202,56 @@ crypto.getRandomValues(new Uint8Array(48)).join('')
 |---|---|
 | Custom address | 例如 `mail`（即 `mail@你的域名`） |
 | Action | **Send to a Worker** |
-| Worker | 选 `mailflare` |
+| Worker | `mailflare` |
 
-保存后，发一封测试邮件到 `mail@你的域名`，几秒后刷新后台应该能看到。
+发一封测试邮件，几秒后刷新后台应能看到。
 
 ### 8.3 收不到邮件？
 
 按顺序排查：
 
-1. **Worker 日志**（控制台 → Worker → **Logs** → **Begin log stream**）
-   发信时观察有没有 `[mailflare]` 开头的输出
-2. 若日志显示「配置缺失」→ 检查第 5 步的 Secret 是否都在
-3. 若日志显示「邮件入库失败」→ 检查 D1 绑定名是否为 `DB`，
-   以及 `schema.sql` 是否执行过
-4. 若推送收到告警 → 按告警里的失败类型对症处理
-5. 若完全没有日志 → Email Routing 的 MX 记录可能没生效（等 5–10 分钟）
+1. Worker → **Logs** → **Begin log stream**，发信时看有没有 `[mailflare]` 输出
+2. 日志显示「配置缺失」→ 检查第 5 步 Secret
+3. 日志显示「邮件入库失败」→ 检查 D1 绑定名是否为 `DB`、`schema.sql` 是否执行
+4. 收到 TG/Bark 告警 → 按告警里的失败类型处理
+5. 完全没有日志 → Email Routing 的 MX 记录未生效（等 5–10 分钟）
+
+> 注意：本项目的 `[observability]` 已关闭（不需要 Dashboard 日志留存）。
+> 排障时用 `Logs` 页面的实时流即可，或本地 `bunx wrangler tail`。
 
 ---
 
-## 9. 推送通知配置
+## 9. 推送通知
 
-部署完成后**在网页里配置**，不需要改代码：
+部署后**在网页里配置**，不需要改代码：
 
 登录后台 → 左下角 **通知设置**
 
 ### Telegram
 
-1. 找 [@BotFather](https://t.me/BotFather) 创建 bot，拿到 token
-   （形如 `123456789:ABCdef...`）
-2. 给 bot 发一条消息，然后访问
-   `https://api.telegram.org/bot<token>/getUpdates` 拿到你的 `chat_id`
+1. 找 [@BotFather](https://t.me/BotFather) 建 bot，拿 token（`123456789:ABCdef...`）
+2. 给 bot 发条消息，访问 `https://api.telegram.org/bot<token>/getUpdates` 拿 `chat_id`
 3. 填入设置页，勾选「启用 Telegram 推送」
 
 ### Bark
 
-1. 打开 Bark App，复制设备 Key
+1. Bark App 里复制设备 Key
 2. 服务地址默认 `https://api.day.app`（自建可改）
 3. 填入设置页，勾选「启用 Bark 推送」
 
-> Token 保存后只会显示尾 4 位。输入框留空表示「不修改」。
+> Token 保存后只显示尾 4 位；输入框留空表示「不修改」。
 
 ---
 
 ## 10. 更新部署
 
-推代码到 GitHub 即自动重新部署：
+推代码即自动重新部署：
 
 ```bash
 git add -A && git commit -m "..." && git push
 ```
 
-Cloudflare 会在构建日志里显示进度。回滚用 **Deployments** 页面的
-**Rollback** 按钮。
+回滚用 **Deployments** 页面的 **Rollback**。
 
 ---
 
@@ -274,10 +259,35 @@ Cloudflare 会在构建日志里显示进度。回滚用 **Deployments** 页面�
 
 | 错误 | 原因 | 解决 |
 |---|---|---|
-| `Couldn't find a D1 DB with the name or binding 'DB'` | 没绑 D1 或名字不对 | 第 4.1 步，变量名必须是 `DB` |
-| `database_id` 全 0 | 没替换 `wrangler.toml` 里的占位符 | 第 1 步拿到的真实 ID |
-| `externref table required for catch wrappers` | `Cargo.toml` 开了 `strip = true` | 移除它（本项目已移除） |
-| 构建超时 | `cargo install worker-build` 太慢 | 重新触发一次，缓存会生效 |
-| 登录返回 500 且日志说缺变量 | Secret 没设 | 第 5 步 |
+| `cargo: command not found` | 构建命令没先装 Rust | 用 `bun run build`（走 `scripts/build.sh`），不要直接写 `cargo install` |
+| `pkg-config` / `openssl-sys` panic | 镜像无 pkg-config | 脚本已设 `OPENSSL_*_DIR`；若仍失败，检查镜像是否有 libssl-dev |
+| `Couldn't find a D1 DB ... 'DB'` | 没绑 D1 或名字不对 | 第 4.1 步，变量名必须是 `DB` |
+| `database_id` 全 0 | 没替换占位符 | 用第 1 步的真实 ID |
+| `externref table required for catch wrappers` | `strip = true` 剥离了 `target_features` 段 | 本项目已用 `strip = "debuginfo"`，不要改回 `true` |
+| 构建超时 | 首次装 Rust + worker-build 较慢 | 重新触发一次，缓存会生效 |
+| 登录 500 且日志说缺变量 | Secret 没设 | 第 5 步 |
 | 收信没反应 | Email Routing 没配或 MX 未生效 | 第 8 步 |
 | 附件 404 | R2 绑定名不是 `R2` | 第 4.2 步 |
+
+---
+
+## 本地开发（可选）
+
+需要 Bun 1.4.3+ 与 Rust（含 `wasm32-unknown-unknown`，由 `rust-toolchain.toml` 自动装）。
+
+```bash
+bun install --frozen-lockfile
+cp .dev.vars.example .dev.vars    # 填写本地配置
+bun run dev                        # 监听前端 TS，改动自动重建
+bunx wrangler dev                  # 启动本地 Worker
+bunx wrangler d1 execute mailflare --local --file=./schema.sql
+```
+
+| 命令 | 用途 |
+|---|---|
+| `bun run build` | 完整构建（前端 + wasm） |
+| `bun run build:frontend` | 只构建前端 |
+| `bun run deploy` | 构建后部署到 Cloudflare |
+| `bun run test` | Rust 测试 + TS 类型检查 + 渲染自检 |
+| `bun run lint` | clippy（-D warnings） |
+| `bun run clean` | 清理构建产物 |

@@ -44,9 +44,9 @@ getrandom = { version = "0.4.3", features = ["wasm_js"] }
 opt-level = "s"   # 以体积优先，兼顾速度
 lto = true
 codegen-units = 1
-# 切勿开启 `strip = true`：wasm-bindgen 生成 catch wrapper 时需要 wasm 里的
-# 符号/名称信息，剥离后 worker-build 会报
-# "externref table required for catch wrappers" 并中断构建。
-# 最终体积由 wasm-opt 负责优化，不需要 Rust 侧 strip。
-debug = false
+# 切勿写成 `strip = true` / `strip = "symbols"`：那样会连同自定义段
+# `target_features` 一并剥离，wasm-bindgen 读不到目标特性，生成 catch
+# wrapper 时报 "externref table required for catch wrappers"。
+# 用 "debuginfo" 可以在保留该段的前提下剥离调试信息。
+strip = "debuginfo"
 

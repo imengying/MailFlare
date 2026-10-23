@@ -34,6 +34,9 @@ MailFlare/
 ├── DEPLOY.md                  # 网页控制台部署指南（连 GitHub）
 ├── package.json               # 前端工具链（bun + TypeScript 7）
 ├── tsconfig.json              # 严格模式 TS 配置
+├── rust-toolchain.toml        # 固定 stable + wasm32 target
+├── bunfig.toml                # bun 精确版本安装 + 缓存目录
+├── .cargo/config.toml         # target-dir 指向 .cache/
 │
 ├── src/                       # ── 后端（Rust）──
 │   ├── lib.rs                 # fetch / email 两个事件入口
@@ -64,7 +67,9 @@ MailFlare/
 │       └── ui.ts              # Toast / 空状态 / 骨架屏
 │
 ├── scripts/
-│   └── build.ts               # bun 构建：TS → 内联进 public/index.html
+│   ├── build.sh               # 云端构建入口（装 Rust → 建前端 → 编 wasm）
+│   ├── build.ts               # bun 构建：TS → 内联进 public/index.html
+│   └── check-render.ts        # 渲染安全自检
 └── public/
     └── index.html             # 构建产物（.gitignore 忽略，勿手改）
 ```
@@ -187,10 +192,28 @@ not_found_handling = "single-page-application" # 前端路由回落 index.html
 6. Deploy
 7. Email Routing → 路由规则 → Send to Worker → 选本 Worker
 
-> 构建命令写在 `wrangler.toml` 的 `[build].command` 里，云端会自动执行
-> `rustup target add` → `cargo install worker-build` → `bun install` →
-> `bun run build` → `worker-build --release`。首次约 3–5 分钟，
-> 之后命中缓存约 1–2 分钟。
+云端构建配置：
+
+| 项 | 值 |
+|---|---|
+| Build command | `bun run build` |
+| Deploy command | `bunx wrangler deploy` |
+| Build variable | `BUN_VERSION=1.4.3` |
+
+`bun run build` 会执行 `scripts/build.sh`。**Cloudflare 构建镜像没有预装
+Rust 工具链，也没有 pkg-config**，所以脚本自己负责：
+
+- 安装 Rust（rustup 官方脚本，minimal profile）
+- 添加 `wasm32-unknown-unknown` target
+- 显式设置 `OPENSSL_INCLUDE_DIR` / `OPENSSL_LIB_DIR`，绕开
+  `openssl-sys` 对 pkg-config 的探测（缺失会 panic）
+- 安装 `worker-build 0.8.7`
+- 构建前端（bun）→ 编译 wasm（worker-build）
+
+脚本是**幂等**的：一次部署里可能被调用两次（Dashboard 的 Build command
+与 `wrangler.toml` 的 `[build].command`），已构建且源文件未变时直接跳过。
+
+首次部署约 5–7 分钟，之后命中缓存约 2 分钟。
 
 ### 备选：本地 wrangler
 

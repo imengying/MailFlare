@@ -1,0 +1,6 @@
+[install]
+# 锁定精确版本，避免 ^ 范围在云端解析出新版本导致构建行为漂移。
+exact = true
+
+[install.cache]
+dir = ".cache/bun"

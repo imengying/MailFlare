@@ -22,13 +22,16 @@ workers_dev = true
 # 会缓存到构建缓存里）。前端用 bun（镜像同样内置）。
 # ---------------------------------------------------------------------------
 [build]
-command = """
-rustup target add wasm32-unknown-unknown &&
-cargo install worker-build --version 0.8.7 --locked &&
-bun install &&
-bun run build &&
-worker-build --release
-"""
+# 调用 scripts/build.sh，它自己负责：
+#   - 安装 Rust 工具链（云端镜像默认没有）
+#   - 添加 wasm32 target
+#   - 绕开 pkg-config 探测 OpenSSL
+#   - 安装 worker-build
+#   - 构建前端（bun）+ 编译 wasm（worker-build）
+#
+# 脚本是幂等的：已构建且源文件未变时直接跳过，所以 Dashboard 的
+# Build command 与这里的 [build].command 各跑一次也不会重复编译。
+command = "bash scripts/build.sh"
 
 # ---------------------------------------------------------------------------
 # D1：邮件元数据 + 动态配置

@@ -5,12 +5,23 @@
   "description": "MailFlare 前端：TypeScript 源码 + bun 构建，产物内联进 public/index.html",
   "scripts": {
     "check": "tsc --noEmit",
-    "build": "bun run scripts/build.ts",
+    "check:render": "bun run scripts/check-render.ts",
+    "build:frontend": "bun run scripts/build.ts",
+    "build:worker": "bash scripts/build.sh",
+    "build": "bash scripts/build.sh",
     "dev": "bun run scripts/build.ts --watch",
-    "check:render": "bun run scripts/check-render.ts"
+    "deploy": "bash scripts/build.sh && bun x wrangler deploy",
+    "lint": "cargo clippy --all-targets --target wasm32-unknown-unknown -- -D warnings",
+    "test": "cargo test && bun run check && bun run check:render",
+    "clean": "rm -rf build .cache public/index.html"
   },
   "devDependencies": {
     "@types/bun": "1.4.3",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "wrangler": "4.152.0"
+  },
+  "packageManager": "bun@1.4.3",
+  "engines": {
+    "bun": ">=1.4.0"
   }
 }

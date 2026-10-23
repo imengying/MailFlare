@@ -1,14 +1,30 @@
-# Rust
-/target
-/build
+# Rust 构建产物
+/target/
+/.cache/
 
-# Wrangler
-/.wrangler
-.dev.vars
+# worker-build 输出
+/build/
+/dist/
+*.wasm
 
 # 前端构建产物：由 `bun run build` 从 web/index.template.html 生成。
 # 提交源码模板即可，避免每次改 TS 都产生一大坨 diff。
 /public/index.html
 
-# bun（lockfile 要提交，保证依赖可复现）
-node_modules
+# JS 工具链
+node_modules/
+.wrangler/
+
+# 本地密钥（wrangler dev 会读取）
+.dev.vars
+.dev.vars.*
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# NOTE: Cargo.lock 与 bun.lock 都要提交。
+# Cloudflare Workers Builds 每次部署都在云端重新解析依赖，
+# lockfile 保证构建可复现、不会因为上游发布新版本而突然失败。
