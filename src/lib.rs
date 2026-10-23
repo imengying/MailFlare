@@ -47,8 +47,8 @@ code{background:#f2f4f7;padding:2px 6px;border-radius:5px}pre{background:#f7f8fa
 <pre>[assets]
 directory = "./public"
 binding = "ASSETS"</pre>
-<p>然后执行 <code>wrangler deploy</code>。你也可以直接用 <code>curl</code> 调 API 自检：</p>
-<pre>curl https://&lt;你的域名&gt;/api/health</pre>
+<p>然后执行 <code>wrangler deploy</code>。你也可以直接用 <code>curl</code> 查看引导配置：</p>
+<pre>curl https://&lt;你的域名&gt;/api/auth/config</pre>
 </body></html>"#;
 
 /// HTTP 入口。

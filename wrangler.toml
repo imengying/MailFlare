@@ -10,45 +10,39 @@ workers_dev = true
 # ---------------------------------------------------------------------------
 # 构建
 #
-# Cloudflare 的 GitHub 集成会在**云端**执行这条命令，所以它必须是
-# 自包含的：不能假设环境里已装好 Rust 工具链或 bun。
+# Cloudflare 连 GitHub 后会**在云端**执行这条命令，所以它必须自包含：
+# 不能假设环境里已装好 Rust 或 bun。
 #
-# 前置条件（在 Cloudflare 控制台的构建配置里设置）：
-#   - 构建变量 Build command:  见下方 command
-#   - 根目录 Deploy command:   npx wrangler deploy
+# 控制台构建配置：
+#   Build command:   bun run build
+#   Deploy command:  bunx wrangler deploy
+#   Build variable:  BUN_VERSION=1.4.3
 #
-# 说明：Cloudflare 的构建镜像已内置 Rust 与 wasm32 target，
-# 但默认没有 worker-build。下面用 cargo install 现装（约 1-2 分钟，
-# 会缓存到构建缓存里）。前端用 bun（镜像同样内置）。
+# scripts/build.sh 负责全部前置工作（装 Rust、加 wasm32 target、
+# 绕开 pkg-config 探测 OpenSSL、装 worker-build、构建前端、编译 wasm），
+# 且是幂等的：已构建且源文件未变时直接跳过。
 # ---------------------------------------------------------------------------
 [build]
-# 调用 scripts/build.sh，它自己负责：
-#   - 安装 Rust 工具链（云端镜像默认没有）
-#   - 添加 wasm32 target
-#   - 绕开 pkg-config 探测 OpenSSL
-#   - 安装 worker-build
-#   - 构建前端（bun）+ 编译 wasm（worker-build）
-#
-# 脚本是幂等的：已构建且源文件未变时直接跳过，所以 Dashboard 的
-# Build command 与这里的 [build].command 各跑一次也不会重复编译。
 command = "bash scripts/build.sh"
 
 # ---------------------------------------------------------------------------
-# D1：邮件元数据 + 动态配置
+# D1：邮件元数据 + 后台设置
 #
-# 这个 database_id 必须换成你自己的：
-#   wrangler d1 create mailflare
-# 或者在控制台 Workers & Pages -> D1 创建后复制 ID。
-# 保持全 0 会导致部署失败（Cloudflare 会报找不到数据库）。
+# 只写 `binding` 与 `database_name`，**不写 `database_id`**：
+# wrangler 会按名字在账号里找同名数据库并自动绑定。这样不用把 ID 抄进
+# 仓库，也就没有「占位符忘了替换导致部署失败」这个坑。
+#
+# 前提：先在控制台 Workers & Pages -> D1 创建名为 `mailflare` 的库，
+# 并在它的 Console 里执行 schema.sql 建表。
 # ---------------------------------------------------------------------------
 [[d1_databases]]
 binding = "DB"
 database_name = "mailflare"
-database_id = "00000000-0000-0000-0000-000000000000"
 
 # ---------------------------------------------------------------------------
 # R2：原始 .eml 与附件
-#   wrangler r2 bucket create mailflare-mail
+#
+# 同样只写桶名，按名字匹配。前提是在控制台先建好 `mailflare-mail` 桶。
 # ---------------------------------------------------------------------------
 [[r2_buckets]]
 binding = "R2"
@@ -72,54 +66,26 @@ run_worker_first = true
 not_found_handling = "single-page-application"
 
 # ---------------------------------------------------------------------------
-# 环境变量（非敏感项）
+# 环境变量
 #
-# ⚠️ 敏感项不要写在这里，也不要提交到 GitHub。
-# 通过控制台 Settings -> Variables and Secrets 添加为 **Secret**：
-#   ADMIN_PASSWORD    管理员密码（必填）
-#   JWT_SECRET        HMAC 密钥，建议 openssl rand -base64 48（必填）
-#   TURNSTILE_SECRET  Turnstile secret（留空则跳过人机验证，仅限本地开发）
+# 这里**只有三个**，都是登录的根凭证，必须在控制台
+# Settings -> Variables and Secrets 里添加，类型选 Secret：
 #
-# 注意：在控制台设置的同名变量会覆盖这里的值。
+#   ADMIN_USERNAME    管理员用户名
+#   ADMIN_PASSWORD    管理员密码
+#   JWT_SECRET        HMAC 密钥，openssl rand -base64 48
+#
+# 其余全部配置（Turnstile、站点地址、推送渠道、收信限额、分页、会话时长）
+# 都存在 D1 的 configs 表里，部署后在网页「设置」里改，即时生效，
+# 不需要重新部署，也不用重走构建。
+#
+# 不把可选参数放进 [vars]：Worker 环境变量运行时改不了，
+# 每加一个参数都要用户重填一遍面板，很快就会失控。
 # ---------------------------------------------------------------------------
-[vars]
-# Turnstile 的 site key 是公开值，会下发给前端渲染挂件；留空则前端隐藏验证框。
-TURNSTILE_SITE_KEY = ""
-# 可选：限制 Turnstile token 只能在指定 hostname 上使用。
-TURNSTILE_HOSTNAME = ""
-
-# 可选：前端与后端不同源部署时填写前端来源，例如 "https://mail.example.com"。
-# 同源部署留空即可。
-ALLOWED_ORIGIN = ""
-
-# 可选：站点对外地址，用于在 Telegram/Bark 消息里拼「查看详情」链接。
-# 留空时退回 ALLOWED_ORIGIN；都为空则消息里不带链接。
-PUBLIC_URL = ""
-
-# JWT 有效期（秒），默认 7 天。
-JWT_TTL_SECS = "604800"
-
-# 原始 .eml 是否保存到 R2（"0" 关闭）。
-STORE_RAW_EML = "1"
-
-# 单封邮件正文入库上限（字节），超出部分截断。默认 256KB。
-MAX_BODY_BYTES = "262144"
-# 单封邮件整体大小上限（字节），超过直接 SMTP 拒收。默认 20MB。
-MAX_MESSAGE_BYTES = "20971520"
-# 单个附件转存 R2 的上限（字节）。默认 10MB。
-MAX_ATTACHMENT_BYTES = "10485760"
-# 附件并发上传度。
-R2_CONCURRENCY = "4"
-# 列表默认/最大分页大小。
-PAGE_SIZE_DEFAULT = "20"
-PAGE_SIZE_MAX = "100"
 
 # ---------------------------------------------------------------------------
 # 收信
 #
 # Cloudflare Email Routing 指向本 Worker 后会自动触发 email 事件。
 # 绑定在控制台配置：Email Routing -> 路由规则 -> Send to Worker。
-# 语法上也可以用下面这段声明（需先在控制台启用 Email Routing）：
 # ---------------------------------------------------------------------------
-# [[send_email]]
-# name = "MAILER"

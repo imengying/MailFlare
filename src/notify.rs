@@ -393,7 +393,7 @@ pub async fn dispatch(ctx: &PushContext<'_>) {
 /// 而不是丢一段难读的 Debug 输出。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InboundFailure {
-    /// 邮件体积超过 MAX_MESSAGE_BYTES
+    /// 邮件体积超过「单封邮件上限」
     TooLarge,
     /// 解析失败（畸形邮件）
     Unparsable,

@@ -1,9 +1,14 @@
-//! 运行时配置：`[vars]` / secrets 的读取，以及 `configs` 表的读写。
+//! 运行时配置。
 //!
-//! 设计要点：
-//! * 静态配置（密码、JWT 密钥、Turnstile 密钥）来自 Worker 环境变量，从不落库；
-//! * 动态配置（TG/Bark 开关与 Token）存在 D1 的 `configs` 表，用 key/value 扁平存放，
-//!   避免每加一个字段就改表结构。
+//! 分两层：
+//!
+//! 1. **环境变量（`Env`）** —— 只有三项，都是登录的根凭证，改一次要重新部署：
+//!    `ADMIN_USERNAME` / `ADMIN_PASSWORD` / `JWT_SECRET`。
+//! 2. **`configs` 表（D1）** —— 其余全部参数，存成一条 JSON，在网页「设置」里改，
+//!    即时生效，不需要重新部署。
+//!
+//! 这么分层的原因：把几十个可选参数塞进 Worker 环境变量，部署面板会变得难以
+//! 维护，改一个分页大小还要重新走一遍构建。
 
 use serde::{Deserialize, Serialize};
 use worker::{D1Database, Env};
@@ -11,161 +16,202 @@ use worker::{D1Database, Env};
 use crate::error::{AppError, AppResult};
 use crate::util::now_secs;
 
-/// `configs` 表里的 key 常量，集中管理避免拼写错误。
+/// `configs` 表里的 key，集中管理避免拼写错误。
 pub mod keys {
-    /// 单行 JSON，存放完整的推送配置（见 `Settings`）。
-    pub const NOTIFY: &str = "notify";
-    /// 登录失败计数，用于实现简单的暴力破解限流。
+    /// 单行 JSON，存放全部可配置项（见 [`Settings`]）。
+    pub const SETTINGS: &str = "settings";
+    /// 登录失败计数，用于暴力破解限流。
     pub const LOGIN_GUARD: &str = "login_guard";
 }
 
+// ===========================================================================
+// 环境变量（只有三项）
+// ===========================================================================
+
 /// 从 `Env` 读取一个必需字符串（vars 或 secret 均可）。
 fn require(env: &Env, name: &str) -> AppResult<String> {
-    match env.var(name) {
-        Ok(v) => {
-            let s = v.to_string();
-            if s.is_empty() {
-                Err(AppError::Internal(format!(
-                    "环境变量 {name} 未配置（请在 wrangler.toml 的 [vars] 或 `wrangler secret put {name}` 中设置）"
-                )))
-            } else {
-                Ok(s)
-            }
-        }
-        Err(_) => Err(AppError::Internal(format!(
-            "缺少环境变量 {name}（请在 wrangler.toml 的 [vars] 或 `wrangler secret put {name}` 中设置）"
-        ))),
+    let value = env.var(name).map(|v| v.to_string()).unwrap_or_default();
+    if value.is_empty() {
+        return Err(AppError::Internal(format!(
+            "环境变量 {name} 未配置，请在控制台 Settings → Variables and Secrets 中添加"
+        )));
     }
+    Ok(value)
 }
 
-/// 读取可选字符串；缺失或为空都返回 `None`。
-fn optional(env: &Env, name: &str) -> Option<String> {
-    env.var(name)
-        .ok()
-        .map(|v| v.to_string())
-        .filter(|s| !s.is_empty())
-}
-
-/// 静态配置快照（每请求构建一次，成本只是几次 JS 属性读取）。
-///
-/// 注意 `TURNSTILE_SITE_KEY` 与 `ALLOWED_ORIGIN` 不在这里：它们会被
-/// `/api/health`、`/api/auth/config`、CORS 预检使用，而这些端点在「密钥尚未
-/// 配好」时也必须能工作，所以由 `api::dispatch` 直接从 `Env` 读取。
+/// 来自 Worker 环境变量的最小配置。
 pub struct Config {
-    /// 管理员密码（明文比较，通过 SHA-256 + 常量时间比较）。
+    /// 管理员用户名。
+    pub admin_username: String,
+    /// 管理员密码。
     pub admin_password: String,
     /// JWT HMAC-SHA256 签名密钥。
     pub jwt_secret: String,
-    /// token 有效期（秒）。
-    pub jwt_ttl_secs: i64,
-    /// Turnstile secret key；留空表示跳过人机校验（便于本地开发）。
-    pub turnstile_secret: Option<String>,
-    /// Turnstile 期望的 hostname（可选加固项）。
-    pub turnstile_hostname: Option<String>,
-    /// 对外访问地址，用于在推送消息里拼「查看详情」链接。
-    pub public_url: Option<String>,
-    /// 原始 .eml 是否存 R2。
-    pub store_raw_eml: bool,
-    /// 单封邮件正文入库上限（字节）。
-    pub max_body_bytes: usize,
-    /// 单封邮件总大小上限（字节）；超过则拒收，避免打爆 128MB 内存。
-    pub max_message_bytes: usize,
-    /// 单个附件转存 R2 的上限（字节）。
-    pub max_attachment_bytes: usize,
-    /// 批量写 R2 的并发度。
-    pub r2_concurrency: usize,
-    /// 列表页默认/最大分页大小。
-    pub page_size_default: i64,
-    pub page_size_max: i64,
 }
 
 impl Config {
-    /// 从 `Env` 读取配置。缺失关键项时返回 `Internal` 错误（会以 500 暴露给前端）。
+    /// 从 `Env` 读取。缺失任一项都返回 `Internal` 错误。
     pub fn from_env(env: &Env) -> AppResult<Self> {
-        // 数字型变量容错：解析失败就用默认值，不让整个 Worker 起不来。
-        let num = |name: &str, default: i64, min: i64, max: i64| -> i64 {
-            optional(env, name)
-                .and_then(|v| v.parse::<i64>().ok())
-                .unwrap_or(default)
-                .clamp(min, max)
-        };
-
         Ok(Self {
+            admin_username: require(env, "ADMIN_USERNAME")?,
             admin_password: require(env, "ADMIN_PASSWORD")?,
             jwt_secret: require(env, "JWT_SECRET")?,
-            jwt_ttl_secs: num("JWT_TTL_SECS", 7 * 24 * 3600, 300, 365 * 24 * 3600),
-            turnstile_secret: optional(env, "TURNSTILE_SECRET"),
-            turnstile_hostname: optional(env, "TURNSTILE_HOSTNAME"),
-            // 优先用 PUBLIC_URL；没配就退回 ALLOWED_ORIGIN（同源部署时两者等价）。
-            public_url: optional(env, "PUBLIC_URL").or_else(|| optional(env, "ALLOWED_ORIGIN")),
-            store_raw_eml: optional(env, "STORE_RAW_EML")
-                .map(|v| !matches!(v.as_str(), "0" | "false" | "off"))
-                .unwrap_or(true),
-            // 正文 256KB 足够展示长邮件，超出部分截断并标注。
-            max_body_bytes: num("MAX_BODY_BYTES", 256 * 1024, 4 * 1024, 900 * 1024) as usize,
-            // Email Routing 单封邮件上限约 25MB，这里默认 20MB。
-            max_message_bytes: num("MAX_MESSAGE_BYTES", 20 * 1024 * 1024, 64 * 1024, 25 * 1024 * 1024)
-                as usize,
-            max_attachment_bytes: num("MAX_ATTACHMENT_BYTES", 10 * 1024 * 1024, 1024, 25 * 1024 * 1024)
-                as usize,
-            r2_concurrency: num("R2_CONCURRENCY", 4, 1, 16) as usize,
-            page_size_default: num("PAGE_SIZE_DEFAULT", 20, 1, 100),
-            page_size_max: num("PAGE_SIZE_MAX", 100, 1, 200),
         })
     }
 }
 
-/// 推送设置，整体以一条 JSON 存在 `configs.value` 里。
+// ===========================================================================
+// 后台设置（D1）
+// ===========================================================================
+
+/// 全部可配置项，整体以一条 JSON 存在 `configs.value` 里。
 ///
-/// 注意：`Serialize` 会输出到前端，所以 Token 用 `#[serde(skip_serializing_if)]`
-/// 之外还得做一次“脱敏输出”，见 `Settings::redacted`。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// 结构体级 `#[serde(default)]` 让缺字段时自动取 [`Default`] 里的值——
+/// 以后新增配置项不需要写数据迁移，旧记录也能正常读出来。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
-    #[serde(default)]
+    // ---- 站点 -----------------------------------------------------------
+    /// 对外访问地址，用于在推送消息里拼「查看详情」链接。
+    pub public_url: String,
+
+    // ---- Turnstile ------------------------------------------------------
+    /// Site Key（公开值，会下发给前端渲染挂件）。
+    pub turnstile_site_key: String,
+    /// Secret Key。留空则后端跳过人机校验。
+    pub turnstile_secret: String,
+    /// 可选加固：限制 token 只能在该 hostname 上使用。
+    pub turnstile_hostname: String,
+
+    // ---- Telegram -------------------------------------------------------
     pub telegram_enabled: bool,
-    #[serde(default)]
     pub telegram_bot_token: String,
-    #[serde(default)]
     pub telegram_chat_id: String,
-    #[serde(default)]
+
+    // ---- Bark -----------------------------------------------------------
     pub bark_enabled: bool,
-    #[serde(default)]
     pub bark_server: String,
-    #[serde(default)]
     pub bark_device_key: String,
+
+    // ---- 收信过滤 -------------------------------------------------------
+    /// 发件人黑名单。
+    ///
+    /// 每项支持两种写法：完整地址 `spam@example.com`，或域名 `@example.com`。
+    /// 命中任一项即静默丢弃（不退信，避免向垃圾邮件发送者确认地址存在）。
+    pub blocked_senders: Vec<String>,
+    /// 收件人白名单。
+    ///
+    /// **留空表示接收发往本域任意地址的邮件**（catch-all），不需要事先注册
+    /// 每个邮箱。只有填了值才启用限制，此时只收名单内的收件人。
+    pub allowed_recipients: Vec<String>,
+
+    // ---- 收信 -----------------------------------------------------------
+    /// 是否把原始 `.eml` 存进 R2。
+    pub store_raw_eml: bool,
+    /// 正文入库上限（字节），超出部分截断。
+    pub max_body_bytes: i64,
+    /// 单封邮件总大小上限（字节），超过直接拒收。
+    pub max_message_bytes: i64,
+    /// 单个附件转存 R2 的上限（字节）。
+    pub max_attachment_bytes: i64,
+    /// 附件写 R2 的并发度。
+    pub r2_concurrency: i64,
+
+    // ---- 列表 -----------------------------------------------------------
+    pub page_size_default: i64,
+    pub page_size_max: i64,
+
+    // ---- 会话 -----------------------------------------------------------
+    /// 登录有效期（秒）。
+    pub jwt_ttl_secs: i64,
 }
 
-/// 对外的脱敏视图：Token 只回传“是否已设置”，不把明文回给前端。
-#[derive(Serialize)]
-pub struct SettingsView<'a> {
-    pub telegram_enabled: bool,
-    pub telegram_bot_token_set: bool,
-    pub telegram_bot_token_hint: &'a str,
-    pub telegram_chat_id: &'a str,
-    pub bark_enabled: bool,
-    pub bark_server: &'a str,
-    pub bark_device_key_set: bool,
-    pub bark_device_key_hint: &'a str,
-}
-
-/// 用一个固定规则展示 token 尾部，方便用户在设置页确认填的是哪一份。
-fn hint(secret: &str) -> &str {
-    if secret.is_empty() {
-        ""
-    } else if secret.len() <= 8 {
-        "****"
-    } else {
-        // 取最后 4 个**字符**（不是字节），避免切坏多字节字符。
-        match secret.char_indices().rev().nth(3) {
-            Some((idx, _)) => &secret[idx..],
-            None => "****",
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            public_url: String::new(),
+            turnstile_site_key: String::new(),
+            turnstile_secret: String::new(),
+            turnstile_hostname: String::new(),
+            telegram_enabled: false,
+            telegram_bot_token: String::new(),
+            telegram_chat_id: String::new(),
+            bark_enabled: false,
+            bark_server: "https://api.day.app".to_string(),
+            bark_device_key: String::new(),
+            blocked_senders: Vec::new(),
+            allowed_recipients: Vec::new(),
+            store_raw_eml: true,
+            // 256KB 足够展示长邮件；Email Routing 单封上限约 25MB。
+            max_body_bytes: 256 * 1024,
+            max_message_bytes: 20 * 1024 * 1024,
+            max_attachment_bytes: 10 * 1024 * 1024,
+            r2_concurrency: 4,
+            page_size_default: 20,
+            page_size_max: 100,
+            jwt_ttl_secs: 7 * 24 * 3600,
         }
     }
 }
 
 impl Settings {
+    /// 归一化 + 夹紧取值范围。
+    ///
+    /// 写库前调用，保证读出来的值总是可用的：即使有人直接改 `configs` 表塞进
+    /// 离谱的数字，也不会让 Worker 跑到 OOM。
+    pub fn normalized(mut self) -> Self {
+        self.public_url = self.public_url.trim().trim_end_matches('/').to_string();
+        self.turnstile_site_key = self.turnstile_site_key.trim().to_string();
+        self.turnstile_secret = self.turnstile_secret.trim().to_string();
+        self.turnstile_hostname = self.turnstile_hostname.trim().to_string();
+        self.telegram_bot_token = self.telegram_bot_token.trim().to_string();
+        self.telegram_chat_id = self.telegram_chat_id.trim().to_string();
+        self.bark_device_key = self.bark_device_key.trim().to_string();
+        self.bark_server = self.bark_server.trim().trim_end_matches('/').to_string();
+        if self.bark_server.is_empty() {
+            self.bark_server = "https://api.day.app".to_string();
+        }
+
+        // 地址列表：统一小写、去空格、丢空项、去重。
+        self.blocked_senders = normalize_list(self.blocked_senders);
+        self.allowed_recipients = normalize_list(self.allowed_recipients);
+
+        // 4KB 起步（再小连正常邮件都放不下），上限 900KB（D1 单行有长度约束）。
+        self.max_body_bytes = self.max_body_bytes.clamp(4 * 1024, 900 * 1024);
+        // 64KB ~ 25MB（Email Routing 的硬上限）。
+        self.max_message_bytes = self.max_message_bytes.clamp(64 * 1024, 25 * 1024 * 1024);
+        self.max_attachment_bytes = self.max_attachment_bytes.clamp(1024, 25 * 1024 * 1024);
+        self.r2_concurrency = self.r2_concurrency.clamp(1, 16);
+        self.page_size_default = self.page_size_default.clamp(1, 100);
+        self.page_size_max = self.page_size_max.clamp(1, 200);
+        // 默认页大小不能超过上限，否则第一页就会请求超量。
+        if self.page_size_default > self.page_size_max {
+            self.page_size_default = self.page_size_max;
+        }
+        // 5 分钟 ~ 1 年。
+        self.jwt_ttl_secs = self.jwt_ttl_secs.clamp(300, 365 * 24 * 3600);
+
+        self
+    }
+
+    /// 是否启用 Turnstile（配了 secret 才算）。
+    pub fn turnstile_enabled(&self) -> bool {
+        !self.turnstile_secret.is_empty()
+    }
+
+    /// 推送消息里的站点地址；空串归一成 `None`。
+    pub fn public_url(&self) -> Option<&str> {
+        (!self.public_url.is_empty()).then_some(self.public_url.as_str())
+    }
+
+    /// 对外的脱敏视图：密钥只回传「是否已设置」+ 尾部提示。
     pub fn redacted(&self) -> SettingsView<'_> {
         SettingsView {
+            public_url: &self.public_url,
+            turnstile_site_key: &self.turnstile_site_key,
+            turnstile_secret_set: !self.turnstile_secret.is_empty(),
+            turnstile_secret_hint: hint(&self.turnstile_secret),
+            turnstile_hostname: &self.turnstile_hostname,
             telegram_enabled: self.telegram_enabled,
             telegram_bot_token_set: !self.telegram_bot_token.is_empty(),
             telegram_bot_token_hint: hint(&self.telegram_bot_token),
@@ -174,27 +220,184 @@ impl Settings {
             bark_server: &self.bark_server,
             bark_device_key_set: !self.bark_device_key.is_empty(),
             bark_device_key_hint: hint(&self.bark_device_key),
+            blocked_senders: &self.blocked_senders,
+            allowed_recipients: &self.allowed_recipients,
+            store_raw_eml: self.store_raw_eml,
+            max_body_bytes: self.max_body_bytes,
+            max_message_bytes: self.max_message_bytes,
+            max_attachment_bytes: self.max_attachment_bytes,
+            r2_concurrency: self.r2_concurrency,
+            page_size_default: self.page_size_default,
+            page_size_max: self.page_size_max,
+            jwt_ttl_secs: self.jwt_ttl_secs,
         }
-    }
-
-    /// 写库前归一化：去掉首尾空格、去掉 URL 尾部斜杠。
-    pub fn normalized(mut self) -> Self {
-        self.telegram_bot_token = self.telegram_bot_token.trim().to_string();
-        self.telegram_chat_id = self.telegram_chat_id.trim().to_string();
-        self.bark_device_key = self.bark_device_key.trim().to_string();
-        self.bark_server = self.bark_server.trim().trim_end_matches('/').to_string();
-        if self.bark_server.is_empty() {
-            self.bark_server = "https://api.day.app".to_string();
-        }
-        self
     }
 }
+
+/// 对外的脱敏视图：不把任何密钥明文回给前端。
+#[derive(Serialize)]
+pub struct SettingsView<'a> {
+    pub public_url: &'a str,
+    pub turnstile_site_key: &'a str,
+    pub turnstile_secret_set: bool,
+    pub turnstile_secret_hint: &'a str,
+    pub turnstile_hostname: &'a str,
+    pub telegram_enabled: bool,
+    pub telegram_bot_token_set: bool,
+    pub telegram_bot_token_hint: &'a str,
+    pub telegram_chat_id: &'a str,
+    pub bark_enabled: bool,
+    pub bark_server: &'a str,
+    pub bark_device_key_set: bool,
+    pub bark_device_key_hint: &'a str,
+    pub blocked_senders: &'a [String],
+    pub allowed_recipients: &'a [String],
+    pub store_raw_eml: bool,
+    pub max_body_bytes: i64,
+    pub max_message_bytes: i64,
+    pub max_attachment_bytes: i64,
+    pub r2_concurrency: i64,
+    pub page_size_default: i64,
+    pub page_size_max: i64,
+    pub jwt_ttl_secs: i64,
+}
+
+/// 清洗地址列表：去空格、转小写、丢空项、去重，保持用户填写顺序。
+///
+/// 去重很重要：用户从聊天记录粘贴列表时常见重复项，而匹配是逐项遍历，
+/// 重复项会白白拉长收信路径上的耗时。
+fn normalize_list(items: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(items.len());
+    for item in items {
+        let value = item.trim().to_lowercase();
+        if value.is_empty() || out.contains(&value) {
+            continue;
+        }
+        out.push(value);
+    }
+    out
+}
+
+/// 从 `From` 头 / 信封地址里抽出纯邮箱地址（去掉显示名与尖括号）。
+///
+/// 信封地址通常已是裸地址，但 `From` 头常见 `"名字" <a@b.com>`，
+/// 直接比较会把「带显示名的发件人」整个漏掉。
+pub fn bare_address(raw: &str) -> String {
+    let raw = raw.trim();
+    // 有尖括号时取最后一对的内容：`"a <b>" <c@d.com>` 也能取对。
+    if let (Some(start), Some(end)) = (raw.rfind('<'), raw.rfind('>'))
+        && start < end
+    {
+        return raw[start + 1..end].trim().to_lowercase();
+    }
+    raw.to_lowercase()
+}
+
+/// 地址规则的匹配（黑白名单共用同一套写法）。
+///
+/// * `a@b.com`  → 精确匹配该地址
+/// * `@b.com`   → 匹配该域名及其子域
+/// * `b.com`    → 等价于 `@b.com`（避免用户少写 `@` 就静默失效）
+fn rule_matches(rule: &str, address: &str, domain: &str) -> bool {
+    // 规则也统一小写：`normalized()` 已经转过一次，但有人可能直接改
+    // D1 表塞进大写项，这里再兜一次，免得规则静默失效。
+    let rule = rule.trim().to_lowercase();
+    match rule.strip_prefix('@') {
+        Some(suffix) => domain == suffix || domain.ends_with(&format!(".{suffix}")),
+        None if rule.contains('@') => address == rule,
+        None => domain == rule || domain.ends_with(&format!(".{rule}")),
+    }
+}
+
+/// 判断发件人是否命中黑名单。列表为空时恒为 `false`。
+pub fn sender_blocked(blocked: &[String], sender: &str) -> bool {
+    if blocked.is_empty() {
+        return false;
+    }
+    let address = bare_address(sender);
+    if address.is_empty() {
+        return false;
+    }
+    let domain = address.rsplit_once('@').map(|(_, d)| d).unwrap_or("");
+    blocked.iter().any(|rule| rule_matches(rule, &address, domain))
+}
+
+/// 判断收件人是否被允许。
+///
+/// **白名单为空时一律放行**——这是「不需要预先注册邮箱也能收件」的关键：
+/// 只有用户真的填了白名单才开始限制。
+pub fn recipient_allowed(allowed: &[String], recipient: &str) -> bool {
+    if allowed.is_empty() {
+        return true;
+    }
+    let address = bare_address(recipient);
+    if address.is_empty() {
+        return false;
+    }
+    let domain = address.rsplit_once('@').map(|(_, d)| d).unwrap_or("");
+    allowed.iter().any(|rule| rule_matches(rule, &address, domain))
+}
+
+/// 校验一条地址规则是否可用。
+///
+/// 接受三种写法（与 [`rule_matches`] 对应）：
+/// `a@b.com` / `@b.com` / `b.com`。规则里不允许出现空格与通配符，
+/// 否则用户会以为 `*@b.com` 生效、而实际匹配不到任何东西。
+pub fn valid_address_rule(rule: &str) -> bool {
+    let rule = rule.trim();
+    if rule.is_empty() || rule.len() > 254 {
+        return false;
+    }
+    if rule.contains(char::is_whitespace) || rule.contains('*') {
+        return false;
+    }
+    // 去掉可选的 `@` 前缀后，剩下的必须像一个域名（或一个完整地址）。
+    let body = rule.strip_prefix('@').unwrap_or(rule);
+    if body.is_empty() {
+        return false;
+    }
+    match body.rsplit_once('@') {
+        // 完整地址：域名部分必须含 `.`
+        Some((local, domain)) => !local.is_empty() && domain.contains('.') && !domain.is_empty(),
+        // 纯域名
+        None => body.contains('.') && !body.starts_with('.') && !body.ends_with('.'),
+    }
+}
+
+/// 合并一个密钥字段：`None` 保持不变，`Some("")` 清空，`Some(v)` 覆盖。
+///
+/// 含 `*` 的值一律忽略——那是脱敏视图（`****abcd`）的特征，前端若误把
+/// 提示回传，绝不能让它覆盖真密钥。
+pub fn merge_secret(slot: &mut String, patch: Option<String>) {
+    if let Some(v) = patch.filter(|v| !v.contains('*')) {
+        *slot = v;
+    }
+}
+
+/// 只展示密钥尾部，方便用户确认填的是哪一份。
+fn hint(secret: &str) -> &str {
+    if secret.is_empty() {
+        ""
+    } else if secret.len() <= 8 {
+        "****"
+    } else {
+        // 按**字符**取最后 4 个，避免切坏多字节字符。
+        match secret.char_indices().rev().nth(3) {
+            Some((idx, _)) => &secret[idx..],
+            None => "****",
+        }
+    }
+}
+
+// ===========================================================================
+// configs 表读写
+// ===========================================================================
 
 /// `configs` 行的反序列化目标。
 ///
 /// 用结构体而非 `first::<String>(Some("value"))`：`value` 列允许 NULL，
 /// 直接反序列化成 `String` 会报错；而且行不存在时也要能区分出来。
-#[derive(serde::Deserialize)]
+#[derive(Deserialize)]
 struct ConfigRow {
     #[serde(default)]
     value: Option<String>,
@@ -211,8 +414,7 @@ async fn get_raw(db: &D1Database, key: &str) -> AppResult<Option<String>> {
 
 /// UPSERT 一个 key/value。
 async fn put_raw(db: &D1Database, key: &str, value: &str) -> AppResult<()> {
-    // `updated_at` 用 Real + CAST 绑定：`D1Type::Integer` 只有 i32，
-    // 秒级时间戳虽然到 2038 年才溢出，但统一走 f64 更安全。
+    // `D1Type::Integer` 只有 i32，秒级时间戳统一走 Real + CAST。
     let ts = now_secs() as f64;
     db.prepare(
         "INSERT INTO configs (key, value, updated_at) VALUES (?1, ?2, CAST(?3 AS INTEGER)) \
@@ -228,22 +430,23 @@ async fn put_raw(db: &D1Database, key: &str, value: &str) -> AppResult<()> {
     Ok(())
 }
 
-/// 读取推送设置；没有记录时返回全空的默认值。
+/// 读取设置；没有记录时返回默认值。
 pub async fn load_settings(db: &D1Database) -> AppResult<Settings> {
-    let Some(raw) = get_raw(db, keys::NOTIFY).await? else {
+    let Some(raw) = get_raw(db, keys::SETTINGS).await? else {
         return Ok(Settings::default());
     };
-    // 配置被人工改坏时不应让整个设置页 500，退回默认值并记一条日志。
-    Ok(serde_json::from_str(&raw).unwrap_or_else(|e| {
-        worker::console_error!("[mailflare] notify 配置解析失败，使用默认值: {e}");
-        Settings::default()
-    }))
+    Ok(serde_json::from_str::<Settings>(&raw)
+        .map(Settings::normalized)
+        .unwrap_or_else(|e| {
+            // 配置被人工改坏时不该让整个设置页 500，退回默认值并记一条日志。
+            worker::console_error!("[mailflare] settings 解析失败，使用默认值: {e}");
+            Settings::default()
+        }))
 }
 
-/// 覆盖写入推送设置。
+/// 覆盖写入设置。
 pub async fn save_settings(db: &D1Database, settings: &Settings) -> AppResult<()> {
-    let raw = serde_json::to_string(settings)?;
-    put_raw(db, keys::NOTIFY, &raw).await
+    put_raw(db, keys::SETTINGS, &serde_json::to_string(settings)?).await
 }
 
 /// 登录失败计数：`{ "fails": n, "until": unix_secs }`。

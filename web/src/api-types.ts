@@ -101,16 +101,23 @@ export interface SessionResult {
 
 /** `GET /api/auth/config` 的响应。 */
 export interface AuthConfig {
-  readonly turnstile_site_key: string | null;
+  /** Turnstile Site Key；空串表示未启用。 */
+  readonly turnstile_site_key: string;
+  /** 后端是否配了 Secret（配了才需要前端拿 token）。 */
   readonly turnstile_required: boolean;
 }
 
 /**
- * 推送设置（脱敏视图），对应 Rust 的 `SettingsView`。
+ * 后台设置（脱敏视图），对应 Rust 的 `SettingsView`。
  *
- * 后端**永不**返回 Token 明文，只回传 `*_set` 与 `*_hint`。
+ * 后端**永不**返回密钥明文，只回传 `*_set` 与 `*_hint`。
  */
 export interface SettingsView {
+  readonly public_url: string;
+  readonly turnstile_site_key: string;
+  readonly turnstile_secret_set: boolean;
+  readonly turnstile_secret_hint: string;
+  readonly turnstile_hostname: string;
   readonly telegram_enabled: boolean;
   readonly telegram_bot_token_set: boolean;
   readonly telegram_bot_token_hint: string;
@@ -119,20 +126,46 @@ export interface SettingsView {
   readonly bark_server: string;
   readonly bark_device_key_set: boolean;
   readonly bark_device_key_hint: string;
+  /** 发件人黑名单：`a@b.com` / `@b.com` / `b.com` 三种写法。 */
+  readonly blocked_senders: readonly string[];
+  /** 收件人白名单；为空数组表示接收本域任意地址（catch-all）。 */
+  readonly allowed_recipients: readonly string[];
+  readonly store_raw_eml: boolean;
+  readonly max_body_bytes: number;
+  readonly max_message_bytes: number;
+  readonly max_attachment_bytes: number;
+  readonly r2_concurrency: number;
+  readonly page_size_default: number;
+  readonly page_size_max: number;
+  readonly jwt_ttl_secs: number;
 }
 
 /**
  * `PUT /api/settings` 的请求体。
  *
- * 语义：字段缺省 = 保持不变；敏感字段传空串 = 清空。
- * 因为后端用 `Option<T>` 区分「没传」与「传了空值」，前端必须**只提交
- * 用户真正改过的字段**，不能把整个表单原样回传（否则脱敏占位符会被写回库）。
+ * 语义：字段缺省 = 保持不变；密钥字段传空串 = 清空。
+ * 后端用 `Option<T>` 区分「没传」与「传了空值」，所以前端只提交
+ * 用户真正填了的字段，绝不能把脱敏占位符（含 `*`）回传。
  */
 export interface SettingsPatch {
+  public_url?: string;
+  turnstile_site_key?: string;
+  turnstile_secret?: string;
+  turnstile_hostname?: string;
   telegram_enabled?: boolean;
   telegram_bot_token?: string;
   telegram_chat_id?: string;
   bark_enabled?: boolean;
   bark_server?: string;
   bark_device_key?: string;
+  blocked_senders?: string[];
+  allowed_recipients?: string[];
+  store_raw_eml?: boolean;
+  max_body_bytes?: number;
+  max_message_bytes?: number;
+  max_attachment_bytes?: number;
+  r2_concurrency?: number;
+  page_size_default?: number;
+  page_size_max?: number;
+  jwt_ttl_secs?: number;
 }

@@ -219,7 +219,7 @@ pub fn strip_html_preview_for_test(html: &str) -> String {
 pub async fn insert_email(db: &D1Database, email: &NewEmail<'_>) -> AppResult<bool> {
     let attachments_json = serde_json::to_string(email.attachments)?;
 
-    // D1 单行上限约 1MB。正文在上游已按 MAX_BODY_BYTES（默认 256KB，
+    // D1 单行上限约 1MB。正文在上游已按「正文入库上限」（默认 256KB，
     // 上限 900KB）截断，但 text + html + attachments JSON 是**相加**的，
     // 两段正文都顶到上限时仍可能超。这里按行总长再做一次兜底截断，
     // 宁可丢一点尾部，也不能让整条 INSERT 失败（那会连元数据一起丢）。

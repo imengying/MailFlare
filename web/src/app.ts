@@ -214,7 +214,12 @@ async function handleLogin(event: Event): Promise<void> {
   const errBox = el<HTMLElement>("#login-err");
   errBox.textContent = "";
 
+  const username = el<HTMLInputElement>("#username").value.trim();
   const password = el<HTMLInputElement>("#password").value;
+  if (!username) {
+    errBox.textContent = "请输入用户名";
+    return;
+  }
   if (!password) {
     errBox.textContent = "请输入密码";
     return;
@@ -226,10 +231,16 @@ async function handleLogin(event: Event): Promise<void> {
   try {
     const result = await api.request<LoginResult>("/api/auth/login", {
       method: "POST",
-      body: { password, turnstile_token: turnstile.getToken() },
+      body: {
+        username,
+        password,
+        turnstile_token: turnstile.getToken(),
+        remember: el<HTMLInputElement>("#remember-me").checked,
+      },
     });
     api.setToken(result.token);
     state.token = result.token;
+    // 只清密码：用户名留在框里，下次登录少打一遍。
     el<HTMLInputElement>("#password").value = "";
     await enterApp();
   } catch (error) {

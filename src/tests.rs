@@ -806,4 +806,319 @@ mod d1_row_budget {
         });
         assert!(size <= 1_000_000, "行总长 {size} 超过上限");
     }
+
+}
+
+mod settings_normalize {
+    //! 设置项的归一化与夹紧。
+    //!
+    //! 这些值都存在 D1 里，用户可以手改表，也可能传上来离谱的数字；
+    //! `normalized()` 必须保证任何输入都产出一个可安全使用的配置。
+
+    use crate::config::Settings;
+
+    #[test]
+    fn trims_and_strips_trailing_slash() {
+        let s = Settings {
+            public_url: "  https://mail.example.com/  ".into(),
+            turnstile_site_key: "  0xABC  ".into(),
+            bark_server: "https://api.day.app/".into(),
+            ..Default::default()
+        }
+        .normalized();
+
+        assert_eq!(s.public_url, "https://mail.example.com");
+        assert_eq!(s.turnstile_site_key, "0xABC");
+        assert_eq!(s.bark_server, "https://api.day.app");
+    }
+
+    #[test]
+    fn empty_bark_server_falls_back_to_default() {
+        let s = Settings {
+            bark_server: "   ".into(),
+            ..Default::default()
+        }
+        .normalized();
+        assert_eq!(s.bark_server, "https://api.day.app");
+    }
+
+    #[test]
+    fn numbers_are_clamped_into_safe_range() {
+        // 全部塞成 0 或极大值，验证每种都落在允许区间内。
+        let s = Settings {
+            max_body_bytes: 0,
+            max_message_bytes: i64::MAX,
+            max_attachment_bytes: -1,
+            r2_concurrency: 999,
+            page_size_default: 0,
+            page_size_max: 9999,
+            jwt_ttl_secs: i64::MAX,
+            ..Default::default()
+        }
+        .normalized();
+
+        assert_eq!(s.max_body_bytes, 4 * 1024, "正文下限 4KB");
+        assert_eq!(s.max_message_bytes, 25 * 1024 * 1024, "邮件上限 25MB");
+        assert_eq!(s.max_attachment_bytes, 1024, "附件下限 1KB");
+        assert_eq!(s.r2_concurrency, 16);
+        assert_eq!(s.page_size_default, 1);
+        assert_eq!(s.page_size_max, 200);
+        assert_eq!(s.jwt_ttl_secs, 365 * 24 * 3600);
+    }
+
+    #[test]
+    fn default_page_size_never_exceeds_max() {
+        // 上限设得比默认页还小，归一化后必须把默认页压下来，
+        // 否则第一页就会请求超量。
+        let s = Settings {
+            page_size_default: 100,
+            page_size_max: 10,
+            ..Default::default()
+        }
+        .normalized();
+        assert_eq!(s.page_size_default, 10);
+    }
+
+    #[test]
+    fn turnstile_requires_secret_to_be_enabled() {
+        let mut s = Settings::default();
+        assert!(!s.turnstile_enabled(), "默认不启用");
+
+        s.turnstile_site_key = "0xABC".into();
+        assert!(!s.turnstile_enabled(), "只有 site key 不算启用");
+
+        s.turnstile_secret = "0xSECRET".into();
+        assert!(s.turnstile_enabled(), "两项都有才算启用");
+    }
+
+    #[test]
+    fn public_url_empty_becomes_none() {
+        let s = Settings::default();
+        assert_eq!(s.public_url(), None);
+
+        let s = Settings {
+            public_url: "https://mail.example.com".into(),
+            ..Default::default()
+        }
+        .normalized();
+        assert_eq!(s.public_url(), Some("https://mail.example.com"));
+    }
+
+    #[test]
+    fn redacted_hides_secrets_but_shows_tail() {
+        let s = Settings {
+            turnstile_secret: "0xSECRETVALUE".into(),
+            telegram_bot_token: "123456:ABCdefGHIjkl".into(),
+            bark_device_key: "short".into(),
+            ..Default::default()
+        };
+        let view = s.redacted();
+
+        assert!(view.turnstile_secret_set);
+        assert!(view.telegram_bot_token_set);
+        // 长密钥只露最后 4 个字符。
+        assert_eq!(view.telegram_bot_token_hint, "Ijkl");
+        // 短密钥整体打码，不泄露任何字符。
+        assert_eq!(view.bark_device_key_hint, "****");
+        // 视图里根本没有明文密钥字段——这是编译期保证的。
+    }
+
+    #[test]
+    fn missing_fields_fall_back_to_defaults() {
+        // 结构体级 #[serde(default)]：旧记录缺字段也能读出来。
+        let s: Settings = serde_json::from_str(r#"{"public_url":"https://a.b"}"#).unwrap();
+        assert_eq!(s.public_url, "https://a.b");
+        assert_eq!(s.page_size_default, 20);
+        assert!(s.store_raw_eml);
+        assert_eq!(s.bark_server, "https://api.day.app");
+    }
+}
+
+mod settings_patch {
+    //! `PUT /api/settings` 的字段合并语义。
+    //!
+    //! 核心不变量：密钥字段的「未提供」与「提供空串」必须可区分——
+    //! 前端不填 = 不修改，显式清空 = 删除。混淆这两者会导致用户
+    //! 改个分页大小就把推送 Token 清空。
+
+    use crate::config::Settings;
+
+    use crate::config::merge_secret;
+
+    /// 让测试直接打生产函数，避免两边各写一份规则而漂移。
+    fn merge(slot: &mut String, patch: Option<&str>) {
+        merge_secret(slot, patch.map(str::to_string));
+    }
+
+    #[test]
+    fn absent_secret_keeps_existing_value() {
+        let mut secret = "old-token".to_string();
+        merge(&mut secret, None);
+        assert_eq!(secret, "old-token", "不提交就该保持原值");
+    }
+
+    #[test]
+    fn empty_secret_clears_value() {
+        let mut secret = "old-token".to_string();
+        merge(&mut secret, Some(""));
+        assert_eq!(secret, "", "显式空串表示清空");
+    }
+
+    #[test]
+    fn new_secret_overwrites() {
+        let mut secret = "old-token".to_string();
+        merge(&mut secret, Some("new-token"));
+        assert_eq!(secret, "new-token");
+    }
+
+    #[test]
+    fn masked_placeholder_is_ignored() {
+        // 前端若误把脱敏提示回传，绝不能覆盖真值。
+        let mut secret = "real-token".to_string();
+        merge(&mut secret, Some("****abcd"));
+        assert_eq!(secret, "real-token", "含 * 的占位符必须被忽略");
+    }
+
+    #[test]
+    fn normalization_applies_after_merge() {
+        // 合并后要跑一遍归一化：空格与尾斜杠都得处理掉。
+        let settings = Settings {
+            public_url: "  https://mail.example.com/ ".into(),
+            ..Default::default()
+        }
+        .normalized();
+        assert_eq!(settings.public_url, "https://mail.example.com");
+    }
+}
+
+mod address_filter {
+    //! 发件人黑名单 / 收件人白名单的匹配规则。
+    //!
+    //! 这两条规则直接决定「收不收这封信」，写错的后果是漏收正常邮件
+    //! 或者放过垃圾邮件，所以边界情况要逐个钉住。
+
+    use crate::config::{bare_address, recipient_allowed, sender_blocked, valid_address_rule};
+
+    fn list(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn bare_address_strips_display_name() {
+        assert_eq!(bare_address("Spam <Spam@Example.COM>"), "spam@example.com");
+        assert_eq!(bare_address("  a@b.com  "), "a@b.com");
+        // 显示名里也含尖括号时，要取最后一对。
+        assert_eq!(bare_address("\"a <b>\" <c@d.com>"), "c@d.com");
+        // 没有尖括号就原样小写。
+        assert_eq!(bare_address("A@B.COM"), "a@b.com");
+    }
+
+    #[test]
+    fn empty_blocklist_blocks_nothing() {
+        assert!(!sender_blocked(&[], "anyone@example.com"));
+    }
+
+    #[test]
+    fn full_address_rule_matches_exactly() {
+        let blocked = list(&["spam@example.com"]);
+        assert!(sender_blocked(&blocked, "spam@example.com"));
+        assert!(sender_blocked(&blocked, "Spam <SPAM@example.com>"));
+        // 同域名的其它地址不受影响。
+        assert!(!sender_blocked(&blocked, "friend@example.com"));
+    }
+
+    #[test]
+    fn domain_rule_matches_subdomains() {
+        let blocked = list(&["@example.com"]);
+        assert!(sender_blocked(&blocked, "a@example.com"));
+        // 子域也要命中，否则 `@example.com` 会漏掉 `a@mail.example.com`。
+        assert!(sender_blocked(&blocked, "a@mail.example.com"));
+        // 相似但不同的域名不能被误伤。
+        assert!(!sender_blocked(&blocked, "a@notexample.com"));
+        assert!(!sender_blocked(&blocked, "a@example.com.evil.com"));
+    }
+
+    #[test]
+    fn bare_domain_rule_equals_at_prefixed() {
+        let blocked = list(&["spam.com"]);
+        assert!(sender_blocked(&blocked, "a@spam.com"));
+        assert!(sender_blocked(&blocked, "a@mail.spam.com"));
+        assert!(!sender_blocked(&blocked, "a@notspam.com"));
+    }
+
+    #[test]
+    fn empty_whitelist_allows_everyone() {
+        // 关键行为：不填白名单 = catch-all，未注册的地址也能收件。
+        assert!(recipient_allowed(&[], "whatever@example.com"));
+        assert!(recipient_allowed(&[], "另一个@example.com"));
+    }
+
+    #[test]
+    fn whitelist_limits_when_filled() {
+        let allowed = list(&["me@example.com", "@mail.example.com"]);
+
+        assert!(recipient_allowed(&allowed, "me@example.com"));
+        assert!(recipient_allowed(&allowed, "anyone@mail.example.com"));
+        assert!(recipient_allowed(&allowed, "deep@a.mail.example.com"));
+
+        assert!(!recipient_allowed(&allowed, "other@example.com"));
+        assert!(!recipient_allowed(&allowed, "x@elsewhere.com"));
+    }
+
+    #[test]
+    fn empty_address_never_matches_nonempty_whitelist() {
+        let allowed = list(&["me@example.com"]);
+        assert!(!recipient_allowed(&allowed, ""));
+        assert!(!recipient_allowed(&allowed, "   "));
+        // 空地址对黑名单也不该误判（没有地址就无从匹配）。
+        assert!(!sender_blocked(&list(&["@example.com"]), ""));
+    }
+
+    #[test]
+    fn valid_rule_accepts_three_forms() {
+        // 三种合法写法
+        assert!(valid_address_rule("me@example.com"));
+        assert!(valid_address_rule("@example.com"));
+        assert!(valid_address_rule("example.com"));
+        // 子域也算合法
+        assert!(valid_address_rule("@mail.example.com"));
+    }
+
+    #[test]
+    fn valid_rule_rejects_junk() {
+        assert!(!valid_address_rule(""));
+        assert!(!valid_address_rule("   "));
+        // 通配符会被误以为生效，直接拒掉。
+        assert!(!valid_address_rule("*@example.com"));
+        // 空格
+        assert!(!valid_address_rule("a b@example.com"));
+        // 没有点的裸词
+        assert!(!valid_address_rule("localhost"));
+        assert!(!valid_address_rule("@localhost"));
+        // 残缺的域名
+        assert!(!valid_address_rule("example."));
+        assert!(!valid_address_rule(".example.com"));
+        // 只有 @
+        assert!(!valid_address_rule("@"));
+        // 本地部分为空
+        assert!(!valid_address_rule("@.com"));
+    }
+
+    #[test]
+    fn every_valid_rule_matches_itself() {
+        // 校验通过、但匹配不上的规则等于静默失效，这里成对验证。
+        for rule in ["me@example.com", "@example.com", "example.com"] {
+            assert!(valid_address_rule(rule), "{rule} 应通过校验");
+        }
+        assert!(sender_blocked(&list(&["me@example.com"]), "me@example.com"));
+        assert!(sender_blocked(&list(&["@example.com"]), "x@example.com"));
+        assert!(sender_blocked(&list(&["example.com"]), "x@example.com"));
+    }
+
+    #[test]
+    fn rules_are_case_insensitive_after_normalize() {
+        let blocked = list(&["SPAM@EXAMPLE.COM"]);
+        // normalized() 会把规则转小写；这里直接验证匹配本身也小写化输入。
+        assert!(sender_blocked(&blocked, "Spam@Example.Com"));
+    }
 }

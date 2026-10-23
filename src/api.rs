@@ -3,7 +3,7 @@
 //! 路由表（全部挂在 `/api` 下，命中 `/api/*` 之外的请求回落到静态资源）：
 //! | 方法   | 路径                     | 说明                              |
 //! |--------|--------------------------|-----------------------------------|
-//! | POST   | /api/auth/login          | 密码 + Turnstile 换 JWT           |
+//! | POST   | /api/auth/login          | 用户名 + 密码 + Turnstile 换 JWT  |
 //! | POST   | /api/auth/logout         | 纯前端丢弃 token（占位）          |
 //! | GET    | /api/auth/session        | 校验当前 token 是否仍有效         |
 //! | GET    | /api/emails              | 分页列表（支持未读筛选/游标）     |
@@ -16,10 +16,10 @@
 //! | GET    | /api/emails/:id/download | 下载原始 .eml                     |
 
 use serde::{Deserialize, Serialize};
-use worker::{Bucket, D1Database, Env, Request, Response};
+use worker::{console_error, Bucket, D1Database, Env, Request, Response};
 
 use crate::auth::{self, SCOPE_DL};
-use crate::config::{self, Config};
+use crate::config::{self, Config, Settings};
 use crate::db::{self, ListQuery};
 use crate::error::{AppError, AppResult};
 use crate::r2;
@@ -31,7 +31,10 @@ const DL_TICKET_TTL: i64 = 600;
 /// 构造 API 用的上下文（每请求一次，成本很低）。
 pub struct ApiCtx<'a> {
     pub env: &'a Env,
+    /// 来自环境变量的最小凭证配置。
     pub cfg: &'a Config,
+    /// 来自 D1 的后台设置（Turnstile、推送、限额等）。
+    pub settings: &'a Settings,
 }
 
 impl<'a> ApiCtx<'a> {
@@ -46,109 +49,35 @@ impl<'a> ApiCtx<'a> {
 
 /// API 总入口：由 `lib.rs` 在 `/api` 前缀命中后调用。
 ///
-/// 顺带处理 CORS：同源部署时不需要任何额外头；若用户显式配置了
-/// `ALLOWED_ORIGIN`（例如前端放 Pages、后端放 Worker），才允许该来源跨域。
+/// 前端与 API 同源部署（同一个 Worker 的 `[assets]` + `/api/*`），
+/// 因此不需要任何 CORS 头，也不接受跨域调用。
 pub async fn dispatch(mut req: Request, env: Env, path: &str) -> Response {
-    // `ALLOWED_ORIGIN` 读一次即可，预检和实际响应都要用。
-    let allowed_origin = env
-        .var("ALLOWED_ORIGIN")
-        .ok()
-        .map(|v| v.to_string())
-        .filter(|s| !s.is_empty());
-
-    // 预检请求：只回 CORS 头，不执行业务逻辑，也不消耗 D1 配额。
-    if req.method() == worker::Method::Options {
-        return preflight(&req, allowed_origin.as_deref());
-    }
-
-    // ---- 不依赖完整配置的端点 ------------------------------------------
-    // 健康检查/前端引导必须能在「还没配好密钥」时工作，否则部署后自检会
-    // 直接 500，反而看不出问题出在哪。
-    let mut resp = match path {
-        "/api/health" => ok_json(&serde_json::json!({
-            "service": "mailflare",
-            "version": env!("CARGO_PKG_VERSION"),
-        })),
-        "/api/auth/config" => {
-            if req.method() != worker::Method::Get {
-                method_not_allowed().into_response()
-            } else {
-                let site_key = env
-                    .var("TURNSTILE_SITE_KEY")
-                    .ok()
-                    .map(|v| v.to_string())
-                    .filter(|s| !s.is_empty());
-                let secret_set = env
-                    .var("TURNSTILE_SECRET")
-                    .ok()
-                    .map(|v| !v.to_string().is_empty())
-                    .unwrap_or(false);
-                ok_json(&AuthConfigResponse {
-                    turnstile_site_key: site_key,
-                    turnstile_required: secret_set,
-                })
-            }
-        }
-        _ => {
-            // 其余接口都需要完整配置。
-            let cfg = match Config::from_env(&env) {
-                Ok(c) => c,
-                Err(e) => return e.into_response(),
-            };
-            let ctx = ApiCtx {
-                env: &env,
-                cfg: &cfg,
-            };
-            match route(&mut req, &ctx, path).await {
-                Ok(r) => r,
-                Err(e) => e.into_response(),
-            }
+    // 所有接口都依赖环境变量里的根凭证；缺了就在这里统一报错。
+    let cfg = match Config::from_env(&env) {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
+    };
+    // D1 拿不到时退化成默认设置：登录仍然要能进行，
+    // 否则用户会因为「没配 D1 绑定」而彻底进不了后台看错误提示。
+    let settings = match env.d1("DB") {
+        Ok(db) => config::load_settings(&db).await.unwrap_or_else(|e| {
+            console_error!("[mailflare] 读取设置失败，使用默认值: {e:?}");
+            Settings::default()
+        }),
+        Err(e) => {
+            console_error!("[mailflare] 无法访问 D1: {e:?}");
+            Settings::default()
         }
     };
-
-    if let Some(origin) = cors_origin(&req, allowed_origin.as_deref()) {
-        let headers = resp.headers_mut();
-        let _ = headers.set("access-control-allow-origin", &origin);
-        // 让缓存/CDN 知道响应随 Origin 变化。
-        let _ = headers.append("vary", "origin");
+    let ctx = ApiCtx {
+        env: &env,
+        cfg: &cfg,
+        settings: &settings,
+    };
+    match route(&mut req, &ctx, path).await {
+        Ok(r) => r,
+        Err(e) => e.into_response(),
     }
-
-    resp
-}
-
-/// 判断本次请求是否应该带上 CORS 头，返回要回显的 Origin。
-///
-/// 只有在显式配置了 `ALLOWED_ORIGIN` 且与请求来源**完全一致**时才放行。
-/// 没配置就一个 CORS 头都不发：同源部署本来不需要，而「无脑回显 Origin」
-/// 会让任意站点都能读你的邮件列表。
-fn cors_origin(req: &Request, allowed: Option<&str>) -> Option<String> {
-    let expected = allowed?;
-    let origin = req.headers().get("origin").ok().flatten()?;
-    expected
-        .eq_ignore_ascii_case(origin.trim())
-        .then_some(origin)
-}
-
-/// 处理 `OPTIONS` 预检。
-fn preflight(req: &Request, allowed: Option<&str>) -> Response {
-    let headers = worker::Headers::new();
-
-    if let Some(origin) = cors_origin(req, allowed) {
-        let _ = headers.set("access-control-allow-origin", &origin);
-        let _ = headers.set("access-control-allow-methods", "GET, POST, PUT, DELETE, OPTIONS");
-        let _ = headers.set(
-            "access-control-allow-headers",
-            "authorization, content-type, range",
-        );
-        let _ = headers.set("access-control-max-age", "86400");
-        let _ = headers.append("vary", "origin");
-    }
-
-    // `ResponseBuilder::empty()` 不返回 Result，天然不会 panic。
-    worker::ResponseBuilder::new()
-        .with_headers(headers)
-        .with_status(204)
-        .empty()
 }
 
 /// 静态路由分发表。
@@ -161,6 +90,15 @@ async fn route(req: &mut Request, ctx: &ApiCtx<'_>, path: &str) -> AppResult<Res
 
     // ---- 认证相关（无需登录）------------------------------------------
     match path {
+        // 前端引导：告诉登录页要不要渲染 Turnstile 挂件、用哪个 site key。
+        // 它必须在登录前可访问，所以放在这里，且只读 D1 设置。
+        "/api/auth/config" => {
+            require_method(&method, worker::Method::Get)?;
+            return Ok(ok_json(&AuthConfigResponse {
+                turnstile_site_key: ctx.settings.turnstile_site_key.clone(),
+                turnstile_required: ctx.settings.turnstile_enabled(),
+            }));
+        }
         "/api/auth/login" => {
             require_method(&method, worker::Method::Post)?;
             return login(req, ctx).await;
@@ -176,7 +114,7 @@ async fn route(req: &mut Request, ctx: &ApiCtx<'_>, path: &str) -> AppResult<Res
             auth::require_admin(req, ctx.cfg)?;
             return Ok(ok_json(&SessionResponse {
                 authenticated: true,
-                expires_in: ctx.cfg.jwt_ttl_secs,
+                expires_in: ctx.settings.jwt_ttl_secs,
             }));
         }
         _ => {}
@@ -266,10 +204,15 @@ fn require_method(actual: &worker::Method, expected: worker::Method) -> AppResul
 
 #[derive(Deserialize)]
 struct LoginRequest {
+    /// 管理员用户名。
+    username: String,
     password: String,
-    /// Turnstile token；未配置 secret 时可为空。
+    /// Turnstile token；后台未配 secret 时可为空。
     #[serde(default)]
     turnstile_token: String,
+    /// 「记住我」：选中时用完整有效期，否则只发 12 小时的短 token。
+    #[serde(default)]
+    remember: bool,
 }
 
 #[derive(Serialize)]
@@ -280,7 +223,7 @@ struct LoginResponse {
 
 #[derive(Serialize)]
 struct AuthConfigResponse {
-    turnstile_site_key: Option<String>,
+    turnstile_site_key: String,
     turnstile_required: bool,
 }
 
@@ -290,7 +233,7 @@ struct SessionResponse {
     expires_in: i64,
 }
 
-/// 登录：Turnstile -> 密码 -> 签发 JWT。
+/// 登录：Turnstile -> 用户名 + 密码 -> 签发 JWT。
 ///
 /// 附带一个简单的失败限流：连续 5 次失败锁定 5 分钟，状态存在 `configs` 表里，
 /// 不依赖 Durable Object 也能挡住常见的密码爆破。
@@ -315,27 +258,35 @@ async fn login(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response> {
     // ---- 1. Turnstile --------------------------------------------------
     // client IP 由 Cloudflare 注入；本地 dev 时可能是 None。
     let client_ip = req.headers().get("cf-connecting-ip").ok().flatten();
-    if let Err(e) = auth::verify_turnstile(ctx.cfg, &body.turnstile_token, client_ip.as_deref()).await
+    if let Err(e) =
+        auth::verify_turnstile(ctx.settings, &body.turnstile_token, client_ip.as_deref()).await
     {
         // Turnstile 失败也计入失败次数，防止刷接口。
         record_failure(&db, &mut guard, now).await?;
         return Err(e);
     }
 
-    // ---- 2. 密码 -------------------------------------------------------
-    if !auth::verify_password(ctx.cfg, &body.password) {
+    // ---- 2. 用户名 + 密码 ----------------------------------------------
+    if !auth::verify_credentials(ctx.cfg, &body.username, &body.password) {
+        // 不区分「用户名不存在」与「密码错误」：避免泄露用户名是否正确。
         record_failure(&db, &mut guard, now).await?;
-        return Err(AppError::Forbidden("密码错误".into()));
+        return Err(AppError::Forbidden("用户名或密码错误".into()));
     }
 
     // ---- 3. 成功：清空计数并签发 token ---------------------------------
     guard = config::LoginGuard::default();
     guard.save(&db).await?;
 
-    let token = auth::issue_token(ctx.cfg, auth::SCOPE_API, "admin", ctx.cfg.jwt_ttl_secs)?;
+    // 未勾选「记住我」时只发 12 小时，降低公共电脑上的暴露面。
+    let ttl = if body.remember {
+        ctx.settings.jwt_ttl_secs
+    } else {
+        ctx.settings.jwt_ttl_secs.min(12 * 3600)
+    };
+    let token = auth::issue_token(ctx.cfg, auth::SCOPE_API, &ctx.cfg.admin_username, ttl)?;
     Ok(ok_json(&LoginResponse {
         token,
-        expires_in: ctx.cfg.jwt_ttl_secs,
+        expires_in: ttl,
     }))
 }
 
@@ -381,9 +332,9 @@ async fn list_emails(req: &Request, ctx: &ApiCtx<'_>) -> AppResult<Response> {
     let limit = query_i64(
         &url,
         "limit",
-        ctx.cfg.page_size_default,
+        ctx.settings.page_size_default,
         1,
-        ctx.cfg.page_size_max,
+        ctx.settings.page_size_max,
     );
 
     let cursor = query_param(&url, "cursor").and_then(|c| parse_cursor(&c));
@@ -460,7 +411,7 @@ async fn get_email(ctx: &ApiCtx<'_>, id: &str) -> AppResult<Response> {
     }
 
     let raw_url = ctx
-        .cfg
+        .settings
         .store_raw_eml
         .then(|| format!("/api/emails/{id}/download?token={dl_token}"));
 
@@ -577,7 +528,7 @@ async fn delete_email(ctx: &ApiCtx<'_>, id: &str) -> AppResult<Response> {
 
     // R2 删除失败不阻塞响应，孤对象可由 bucket 生命周期规则兜底清理。
     let bucket = ctx.bucket()?;
-    r2::delete_email_objects(&bucket, id, &attachments, ctx.cfg.store_raw_eml).await;
+    r2::delete_email_objects(&bucket, id, &attachments, ctx.settings.store_raw_eml).await;
 
     Ok(ok_json(&serde_json::json!({ "id": id, "deleted": true })))
 }
@@ -693,7 +644,7 @@ fn sanitize_content_type(raw: &str) -> String {
 ///
 /// 与附件一样接受两种凭证，方便前端直接用 `<a download>` 打开。
 async fn download_raw(req: &Request, ctx: &ApiCtx<'_>, id: &str) -> AppResult<Response> {
-    if !ctx.cfg.store_raw_eml {
+    if !ctx.settings.store_raw_eml {
         return Err(AppError::NotFound);
     }
 
@@ -730,24 +681,54 @@ async fn get_settings(ctx: &ApiCtx<'_>) -> AppResult<Response> {
     Ok(ok_json(&settings.redacted()))
 }
 
-/// 更新设置。
+/// 设置的可写字段。
 ///
-/// 语义：字段缺省表示「保持不变」，空字符串表示「清空」。
-/// 这样前端不需要把已经脱敏的 token 再回传，避免把 `****abcd` 写成真 token。
-#[derive(Deserialize)]
+/// 全部 `Option`：`None` 表示「保持不变」，`Some("")` 表示「清空」。
+/// 这样前端不需要把脱敏后的 `****abcd` 再回传，避免把占位符写成真密钥。
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct SettingsPatch {
-    #[serde(default)]
+    public_url: Option<String>,
+
+    turnstile_site_key: Option<String>,
+    turnstile_secret: Option<String>,
+    turnstile_hostname: Option<String>,
+
     telegram_enabled: Option<bool>,
-    #[serde(default)]
     telegram_bot_token: Option<String>,
-    #[serde(default)]
     telegram_chat_id: Option<String>,
-    #[serde(default)]
+
     bark_enabled: Option<bool>,
-    #[serde(default)]
     bark_server: Option<String>,
-    #[serde(default)]
     bark_device_key: Option<String>,
+
+    blocked_senders: Option<Vec<String>>,
+    allowed_recipients: Option<Vec<String>>,
+
+    store_raw_eml: Option<bool>,
+    max_body_bytes: Option<i64>,
+    max_message_bytes: Option<i64>,
+    max_attachment_bytes: Option<i64>,
+    r2_concurrency: Option<i64>,
+
+    page_size_default: Option<i64>,
+    page_size_max: Option<i64>,
+
+    jwt_ttl_secs: Option<i64>,
+}
+
+/// 把 `Settings` 上某个字段覆盖为 patch 里的值。
+///
+/// 用一个宏而不是逐字段写 `if let Some(v) = patch.x { s.x = v; }`：
+/// 20 多个字段手写既啰嗦又容易漏。
+macro_rules! apply {
+    ($patch:expr => $settings:expr; $($field:ident),* $(,)?) => {
+        $(
+            if let Some(v) = $patch.$field {
+                $settings.$field = v;
+            }
+        )*
+    };
 }
 
 async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response> {
@@ -759,30 +740,56 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
     let db = ctx.db()?;
     let mut settings = config::load_settings(&db).await?;
 
-    if let Some(v) = patch.telegram_enabled {
-        settings.telegram_enabled = v;
-    }
-    if let Some(v) = patch.telegram_chat_id {
-        settings.telegram_chat_id = v;
-    }
-    if let Some(v) = patch.bark_enabled {
-        settings.bark_enabled = v;
-    }
-    if let Some(v) = patch.bark_server {
-        settings.bark_server = v;
-    }
+    // 布尔与数值：有值就覆盖。
+    apply!(patch => settings;
+        telegram_enabled, bark_enabled, store_raw_eml,
+        max_body_bytes, max_message_bytes, max_attachment_bytes, r2_concurrency,
+        page_size_default, page_size_max, jwt_ttl_secs,
+    );
 
-    // 敏感字段：空串表示清空，非空才覆盖；脱敏占位符（含 *）一律忽略。
-    if let Some(v) = patch.telegram_bot_token.filter(|v| !v.contains('*')) {
-        settings.telegram_bot_token = v;
+    // 非密钥字符串：有值就覆盖（空串即清空）。
+    apply!(patch => settings;
+        public_url, turnstile_site_key, turnstile_hostname,
+        telegram_chat_id, bark_server,
+    );
+
+    // 密钥字段：仅当值不含 `*` 时才覆盖，防止把脱敏占位符写回去。
+    // 空串是有意义的（表示清空），所以要保留。
+    config::merge_secret(&mut settings.turnstile_secret, patch.turnstile_secret);
+    config::merge_secret(&mut settings.telegram_bot_token, patch.telegram_bot_token);
+    config::merge_secret(&mut settings.bark_device_key, patch.bark_device_key);
+
+    // 地址列表：整表替换（前端提交完整数组，不支持逐项增删——
+    // 列表项之间没有稳定标识，做增量合并反而容易错）。
+    if let Some(list) = patch.blocked_senders {
+        settings.blocked_senders = list;
     }
-    if let Some(v) = patch.bark_device_key.filter(|v| !v.contains('*')) {
-        settings.bark_device_key = v;
+    if let Some(list) = patch.allowed_recipients {
+        settings.allowed_recipients = list;
     }
 
     settings = settings.normalized();
 
-    // 基本校验，避免把明显错误的配置存进去后才发现收不到通知。
+    // ---- 校验：把明显错误的配置挡在写库之前 -----------------------------
+    if settings.public_url.contains('?') || settings.public_url.contains('#') {
+        return Err(AppError::BadRequest(
+            "站点地址不能包含 ? 或 #，请只填协议 + 域名（可带路径）".into(),
+        ));
+    }
+    if !settings.public_url.is_empty()
+        && !settings.public_url.starts_with("https://")
+        && !settings.public_url.starts_with("http://")
+    {
+        return Err(AppError::BadRequest(
+            "站点地址必须以 http:// 或 https:// 开头".into(),
+        ));
+    }
+    if !settings.bark_server.starts_with("https://") && !settings.bark_server.starts_with("http://")
+    {
+        return Err(AppError::BadRequest(
+            "Bark 服务地址必须以 http:// 或 https:// 开头".into(),
+        ));
+    }
     if settings.telegram_enabled
         && (settings.telegram_bot_token.is_empty() || settings.telegram_chat_id.is_empty())
     {
@@ -795,15 +802,23 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
             "启用 Bark 推送必须填写 Device Key".into(),
         ));
     }
-    if !settings.bark_server.starts_with("https://") && !settings.bark_server.starts_with("http://")
+    if let Some(bad) = settings
+        .blocked_senders
+        .iter()
+        .chain(settings.allowed_recipients.iter())
+        .find(|rule| !config::valid_address_rule(rule))
     {
+        return Err(AppError::BadRequest(format!(
+            "地址规则「{bad}」格式不正确：请填 a@b.com、@b.com 或 b.com"
+        )));
+    }
+    if settings.turnstile_enabled() && settings.turnstile_site_key.is_empty() {
         return Err(AppError::BadRequest(
-            "Bark 服务地址必须以 http:// 或 https:// 开头".into(),
+            "填写了 Turnstile Secret 就必须同时填写 Site Key，否则前端渲染不出验证框".into(),
         ));
     }
 
     config::save_settings(&db, &settings).await?;
-
     Ok(ok_json(&settings.redacted()))
 }
 

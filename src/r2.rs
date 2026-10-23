@@ -10,7 +10,7 @@
 
 use worker::{Bucket, HttpMetadata, Object};
 
-use crate::config::Config;
+use crate::config::Settings;
 use crate::db::AttachmentMeta;
 use crate::error::{AppError, AppResult};
 use crate::mail::RawAttachment;
@@ -194,6 +194,6 @@ pub fn inline_allowed(content_type: &str) -> bool {
 }
 
 /// 校验配置里声明的并发度，避免误配导致一次开过多子请求。
-pub fn effective_concurrency(cfg: &Config) -> usize {
-    cfg.r2_concurrency.clamp(1, 16)
+pub fn effective_concurrency(settings: &Settings) -> usize {
+    settings.r2_concurrency.clamp(1, 16) as usize
 }

@@ -76,6 +76,18 @@
   .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
   .field > label { font-size: 13px; font-weight: 600; color: var(--text-dim); }
   .field .hint { font-size: 12px; color: var(--text-faint); }
+  /* 数值 + 单位的组合输入框 */
+  .inline-input { display: flex; align-items: center; gap: 8px; }
+  .inline-input .input { flex: 1 1 auto; }
+  .unit { flex: 0 0 auto; font-size: 13px; color: var(--text-faint); }
+  /* 多行地址列表输入框：等宽字体便于对齐域名 */
+  .textarea {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    resize: vertical;
+    min-height: 84px;
+  }
   .input {
     width: 100%; padding: 9px 12px; border-radius: 9px;
     border: 1px solid var(--border); background: var(--surface);
@@ -278,13 +290,25 @@
 <section id="login-view">
   <form class="login-card" id="login-form" autocomplete="on">
     <div class="brand"><span class="logo">✉</span> MailFlare</div>
-    <p class="login-sub">输入管理员密码以访问你的邮箱</p>
+    <p class="login-sub">使用管理员账号登录</p>
 
     <div class="field">
-      <label for="password">管理员密码</label>
+      <label for="username">用户名</label>
+      <input class="input" id="username" name="username" type="text"
+             autocomplete="username" required placeholder="admin" autocapitalize="off"
+             autocorrect="off" spellcheck="false">
+    </div>
+
+    <div class="field">
+      <label for="password">密码</label>
       <input class="input" id="password" name="password" type="password"
              autocomplete="current-password" required placeholder="••••••••">
     </div>
+
+    <label class="switch" style="margin-bottom:14px">
+      <input type="checkbox" id="remember-me">
+      <span>记住我（12 小时 / 7 天）</span>
+    </label>
 
     <div class="field" id="turnstile-field" hidden>
       <label>人机验证</label>
@@ -307,7 +331,7 @@
     <button class="nav-item" data-filter="unread">
       <span>🔵</span> 未读
     </button>
-    <button class="nav-item" id="open-settings"><span>⚙️</span> 通知设置</button>
+    <button class="nav-item" id="open-settings"><span>⚙️</span> 设置</button>
     <div class="spacer"></div>
     <p class="storage-note">邮件正文截断入库，原始 .eml 与附件存放在 R2。</p>
     <button class="nav-item" id="logout"><span>↩</span> 退出登录</button>
@@ -335,11 +359,41 @@
 <!-- ======================= 设置抽屉 ======================= -->
 <div class="drawer-mask" id="settings-mask" hidden>
   <form class="drawer" id="settings-form">
-    <h2>通知设置</h2>
-    <p class="sub">新邮件到达时异步推送到 Telegram / Bark，不影响收信速度。</p>
+    <h2>设置</h2>
+    <p class="sub">保存后立即生效，无需重新部署。</p>
 
     <div class="group">
-      <h3>Telegram</h3>
+      <h3>站点</h3>
+      <div class="field">
+        <label for="public-url">站点地址</label>
+        <input class="input" id="public-url" autocomplete="off" placeholder="https://mail.example.com">
+        <span class="hint">用于在推送消息里拼「查看详情」链接。留空则不带链接。</span>
+      </div>
+    </div>
+
+    <div class="group">
+      <h3>人机验证（Turnstile）</h3>
+      <p class="hint" style="margin:0 0 12px">
+        两项都填才会在登录页显示验证框。留空表示不启用，登录只剩密码一道防线。
+      </p>
+      <div class="field">
+        <label for="ts-site-key">Site Key</label>
+        <input class="input" id="ts-site-key" autocomplete="off" placeholder="0x4AAA...">
+      </div>
+      <div class="field">
+        <label for="ts-secret">Secret Key</label>
+        <input class="input" id="ts-secret" type="password" autocomplete="off" placeholder="0x4AAA...">
+        <span class="hint" id="ts-secret-hint"></span>
+      </div>
+      <div class="field">
+        <label for="ts-hostname">限定 Hostname（可选）</label>
+        <input class="input" id="ts-hostname" autocomplete="off" placeholder="mail.example.com">
+        <span class="hint">填了之后只接受该域名的 token，可防止他人复用你的 Site Key。</span>
+      </div>
+    </div>
+
+    <div class="group">
+      <h3>Telegram 推送</h3>
       <div class="switch" style="margin-bottom:12px">
         <input type="checkbox" id="tg-enabled">
         <label for="tg-enabled">启用 Telegram 推送</label>
@@ -353,12 +407,12 @@
       <div class="field">
         <label for="tg-chat">Chat ID</label>
         <input class="input" id="tg-chat" autocomplete="off" placeholder="123456789">
-        <span class="hint">私聊给你自己的 ID，或群组/频道的 <code>-100…</code> ID。</span>
+        <span class="hint">私聊 ID，或群组/频道的 <code>-100…</code> ID。</span>
       </div>
     </div>
 
     <div class="group">
-      <h3>Bark</h3>
+      <h3>Bark 推送</h3>
       <div class="switch" style="margin-bottom:12px">
         <input type="checkbox" id="bark-enabled">
         <label for="bark-enabled">启用 Bark 推送</label>
@@ -371,6 +425,89 @@
         <label for="bark-key">Device Key</label>
         <input class="input" id="bark-key" type="password" autocomplete="off" placeholder="设备 Key">
         <span class="hint" id="bark-key-hint"></span>
+      </div>
+    </div>
+
+    <div class="group">
+      <h3>收信过滤</h3>
+      <div class="field">
+        <label for="blocked-senders">发件人黑名单</label>
+        <textarea class="input textarea" id="blocked-senders" rows="4"
+                  placeholder="spam@example.com&#10;@ads.example.com&#10;bad-domain.com"></textarea>
+        <span class="hint">
+          一行一条，命中即静默丢弃（不回退信，避免向对方确认地址存在）。
+          支持三种写法：<code>a@b.com</code> 精确匹配、<code>@b.com</code>
+          匹配该域名及子域、<code>b.com</code> 等价于 <code>@b.com</code>。
+        </span>
+      </div>
+      <div class="field">
+        <label for="allowed-recipients">收件人白名单</label>
+        <textarea class="input textarea" id="allowed-recipients" rows="4"
+                  placeholder="留空 = 接收本域任意地址"></textarea>
+        <span class="hint">
+          <strong>留空表示不限制</strong>，发往本域任意地址的邮件都会收下，
+          不需要预先注册每个邮箱。填了之后只收名单内的收件人。
+          写法与黑名单一致。
+        </span>
+      </div>
+    </div>
+
+    <div class="group">
+      <h3>收信</h3>
+      <div class="switch" style="margin-bottom:12px">
+        <input type="checkbox" id="store-raw">
+        <label for="store-raw">保存原始邮件（.eml）</label>
+      </div>
+      <p class="hint" style="margin:0 0 12px">
+        关闭后不再往 R2 存原文，后台也无法下载 .eml，可省一些存储。
+      </p>
+      <div class="field">
+        <label for="max-message">单封邮件上限</label>
+        <div class="inline-input">
+          <input class="input" id="max-message" type="number" min="1" max="25" step="1">
+          <span class="unit">MB</span>
+        </div>
+        <span class="hint">超过直接拒收（Email Routing 硬上限 25MB）。</span>
+      </div>
+      <div class="field">
+        <label for="max-body">正文入库上限</label>
+        <div class="inline-input">
+          <input class="input" id="max-body" type="number" min="4" max="900" step="4">
+          <span class="unit">KB</span>
+        </div>
+        <span class="hint">超出部分截断，防止撑爆 D1 行大小。</span>
+      </div>
+      <div class="field">
+        <label for="max-attachment">单个附件上限</label>
+        <div class="inline-input">
+          <input class="input" id="max-attachment" type="number" min="1" max="25" step="1">
+          <span class="unit">MB</span>
+        </div>
+        <span class="hint">超过则跳过转存，列表里显示「附件过大，未保存」。</span>
+      </div>
+      <div class="field">
+        <label for="r2-concurrency">附件上传并发</label>
+        <input class="input" id="r2-concurrency" type="number" min="1" max="16" step="1">
+      </div>
+    </div>
+
+    <div class="group">
+      <h3>列表与会话</h3>
+      <div class="field">
+        <label for="page-size">每页条数</label>
+        <input class="input" id="page-size" type="number" min="1" max="100" step="1">
+      </div>
+      <div class="field">
+        <label for="page-size-max">每页条数上限</label>
+        <input class="input" id="page-size-max" type="number" min="1" max="200" step="1">
+      </div>
+      <div class="field">
+        <label for="jwt-ttl">登录有效期</label>
+        <div class="inline-input">
+          <input class="input" id="jwt-ttl" type="number" min="1" max="365" step="1">
+          <span class="unit">天</span>
+        </div>
+        <span class="hint">勾选「记住我」时生效；不勾选最多 12 小时。</span>
       </div>
     </div>
 

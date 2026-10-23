@@ -5,13 +5,14 @@
 //!   mail-parser 的 `Message<'x>` 直接借用这块缓冲区（零拷贝）。
 //! * 只有需要落库/写 R2 的字段才 `to_owned()`。附件写 R2 时 `Vec<u8>` 直接交给
 //!   `Bucket::put`，避免再拷一份。
-//! * 超过 `MAX_MESSAGE_BYTES` 的邮件在读取前就 `set_reject`，不让它进入 WASM 堆；
+//! * 发件人黑名单 / 收件人白名单都在读取报文**之前**判断，只比对信封地址；
+//! * 超过「单封邮件上限」的邮件在读取前就 `set_reject`，不让它进入 WASM 堆；
 //!   单个附件超限时跳过转存，只在 D1 留下 `stored=false` 的元数据。
 //! * 附件写 R2 用 `buffer_unordered` 控制并发度；推送整体挂到 `waitUntil`。
 
 use worker::{console_error, console_log, Bucket, Context, D1Database, Env, ForwardableEmailMessage};
 
-use crate::config::{self, Config};
+use crate::config::{self, Config, Settings};
 use crate::db::{self, NewEmail};
 use crate::error::{AppError, AppResult};
 use crate::mail;
@@ -30,21 +31,40 @@ pub async fn handle(
     let envelope_from = message.from();
     let raw_size = message.raw_size();
 
-    // 配置缺失时直接拒收。此时没法告警（推送配置也在 D1 里，且很可能
-    // 连 D1 绑定都没配好），只能写日志——运维应该盯 Worker 日志。
-    let cfg = match Config::from_env(&env) {
-        Ok(c) => c,
-        Err(e) => {
-            console_error!("[mailflare] 收信失败：配置缺失 · {e:?}");
-            message.set_reject("MailFlare 未完成配置，暂时无法接收邮件");
-            return Ok(());
-        }
-    };
+    // 账号配置缺失时直接拒收。此时无法告警（推送配置也在 D1 里，
+    // 很可能连 D1 绑定都没配好），只能写日志——运维应该盯 Worker 日志。
+    if let Err(e) = Config::from_env(&env) {
+        console_error!("[mailflare] 收信失败：配置缺失 · {e:?}");
+        message.set_reject("MailFlare 未完成配置，暂时无法接收邮件");
+        return Ok(());
+    }
 
     // D1 句柄提前取：既给正常流程用，也给失败告警用。
     // 拿不到就直接返回错误（无法告警也无法入库）。
     let db = env.d1("DB")?;
     let bucket = env.bucket("R2")?;
+
+    // 收信参数全部来自 D1；读取失败时退回默认值而不是拒收，
+    // 宁可多存一封邮件，也不要因为设置表读不出来而丢信。
+    let cfg = config::load_settings(&db).await.unwrap_or_else(|e| {
+        console_error!("[mailflare] 读取设置失败，使用默认值继续收信: {e:?}");
+        Settings::default()
+    });
+
+    // ---- 黑名单 / 白名单 ------------------------------------------------
+    // 放在体积检查之前：垃圾邮件往往带大附件，先按地址拦掉能省下
+    // 后面所有判断的成本。两者都只看信封地址，不解析报文。
+    if config::sender_blocked(&cfg.blocked_senders, &envelope_from) {
+        // 黑名单命中：静默丢弃，不退信。
+        // 退信等于告诉对方「这个地址真实存在」，反而助长后续骚扰。
+        console_log!("[mailflare] 发件人在黑名单中，已丢弃：{envelope_from}");
+        return Ok(());
+    }
+    if !config::recipient_allowed(&cfg.allowed_recipients, &envelope_to) {
+        // 白名单非空但没匹配上：同样静默丢弃。
+        console_log!("[mailflare] 收件人不在白名单中，已丢弃：{envelope_to}");
+        return Ok(());
+    }
 
     // ---- 体积检查 ------------------------------------------------------
     // 超限邮件在**读取之前**就拒收，数据不会进入 WASM 堆。
@@ -184,7 +204,7 @@ fn spawn_alert(
 /// `raw` 按值传入：解析只借用它，最后再整体 move 给 R2 保存原文，
 /// 全程只有 JS -> Rust 那一次不可避免的拷贝。
 async fn process(
-    cfg: &Config,
+    cfg: &Settings,
     db: &D1Database,
     bucket: &Bucket,
     raw: Vec<u8>,
@@ -193,7 +213,7 @@ async fn process(
     received_at: i64,
 ) -> AppResult<Option<db::EmailDetail>> {
     // 解析结果的借用只存在于这一行；`ParsedEmail` 全部字段都是拥有所有权的。
-    let Some(parsed) = mail::parse(&raw, cfg.max_body_bytes) else {
+    let Some(parsed) = mail::parse(&raw, cfg.max_body_bytes as usize) else {
         return Err(AppError::BadRequest("邮件格式无法解析".into()));
     };
 
@@ -211,7 +231,7 @@ async fn process(
 
     for (index, att) in parsed.attachments.into_iter().enumerate() {
         let mut meta = mail::attachment_meta(index, &att);
-        if att.bytes.len() > cfg.max_attachment_bytes {
+        if att.bytes.len() > cfg.max_attachment_bytes as usize {
             console_error!(
                 "[mailflare] 附件「{}」超过上限（{:.1}MB），跳过转存",
                 att.filename,
@@ -320,8 +340,8 @@ async fn process(
 }
 
 /// 把推送任务挂到 `waitUntil` 上。
-fn spawn_push(cfg: &Config, env: &Env, ctx: Context, email: db::EmailDetail) {
-    let public_url = cfg.public_url.clone();
+fn spawn_push(settings: &Settings, env: &Env, ctx: Context, email: db::EmailDetail) {
+    let public_url = settings.public_url().map(|s| s.to_string());
 
     // 提前裁好一小段预览：别让几百 KB 的正文一直活在 waitUntil 的 future 里。
     let preview_source = if email.text_body.is_empty() {

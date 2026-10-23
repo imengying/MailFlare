@@ -7,7 +7,7 @@
 use serde::Deserialize;
 use worker::{Fetch, Headers, Method, Request, RequestInit};
 
-use crate::config::Config;
+use crate::config::{Config, Settings};
 use crate::error::{AppError, AppResult};
 use crate::jwt::{self, Claims};
 use crate::util::{now_secs, secret_eq};
@@ -97,9 +97,15 @@ pub fn require_attachment_access(
     Ok(())
 }
 
-/// 校验管理员密码（SHA-256 + 常量时间比较）。
-pub fn verify_password(cfg: &Config, candidate: &str) -> bool {
-    secret_eq(candidate, &cfg.admin_password)
+/// 校验管理员凭证（用户名 + 密码）。
+///
+/// 两项都走 SHA-256 + 常量时间比较：即便用户名不匹配也要把密码比较算完，
+/// 避免通过响应时间差判断「用户名对不对」。
+pub fn verify_credentials(cfg: &Config, username: &str, password: &str) -> bool {
+    let user_ok = secret_eq(username, &cfg.admin_username);
+    let pass_ok = secret_eq(password, &cfg.admin_password);
+    // 用按位与：两个比较都要执行，不做短路。
+    user_ok & pass_ok
 }
 
 /// Turnstile `siteverify` 的响应体。
@@ -115,19 +121,19 @@ struct SiteVerifyResponse {
 
 /// 校验 Turnstile token。
 ///
-/// `TURNSTILE_SECRET` 未配置时直接放行（方便本地 `wrangler dev`），
-/// 但会打印警告，避免线上忘记配置还以为是“正常工作”。
+/// 后台设置里没填 Secret 时直接放行（方便本地开发），但会打印警告，
+/// 避免线上忘记配置还以为是「正常工作」。
 pub async fn verify_turnstile(
-    cfg: &Config,
+    settings: &Settings,
     token: &str,
     remote_ip: Option<&str>,
 ) -> AppResult<()> {
-    let Some(secret) = cfg.turnstile_secret.as_deref() else {
+    if !settings.turnstile_enabled() {
         worker::console_warn!(
-            "[mailflare] 未配置 TURNSTILE_SECRET，已跳过人机验证（仅建议在本地开发时这样）"
+            "[mailflare] 未配置 Turnstile Secret，已跳过人机验证（仅建议在本地开发时这样）"
         );
         return Ok(());
-    };
+    }
 
     if token.trim().is_empty() {
         return Err(AppError::Forbidden("请先完成人机验证".into()));
@@ -135,7 +141,7 @@ pub async fn verify_turnstile(
 
     // Turnstile 只接受 x-www-form-urlencoded 或 JSON；这里用表单，兼容性最好。
     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-    serializer.append_pair("secret", secret);
+    serializer.append_pair("secret", &settings.turnstile_secret);
     serializer.append_pair("response", token);
     // idempotency_key 让 Cloudflare 对重复提交去重，避免用户狂点登录时重复计费/报错。
     serializer.append_pair("idempotency_key", &crate::util::new_id());
@@ -175,8 +181,8 @@ pub async fn verify_turnstile(
     }
 
     // 可选加固：限制 token 只能在本站点使用。
-    if let Some(expected) = cfg.turnstile_hostname.as_deref()
-        && result.hostname.as_deref() != Some(expected)
+    if !settings.turnstile_hostname.is_empty()
+        && result.hostname.as_deref() != Some(settings.turnstile_hostname.as_str())
     {
         return Err(AppError::Forbidden("人机验证的 hostname 不匹配".into()));
     }

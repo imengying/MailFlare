@@ -4,7 +4,8 @@
 -- 本地：wrangler d1 execute mailflare --file=./schema.sql --local
 -- ============================================================================
 
--- 动态配置表：通知设置、登录失败计数等全部以 key/value 形式存放，
+-- 动态配置表：后台设置（Turnstile、推送、收信限额、分页等）与登录失败计数
+-- 全部以 key/value 形式存放。settings 的值是一条 JSON，
 -- 这样新增配置项时无需再做数据库迁移。
 CREATE TABLE IF NOT EXISTS configs (
   key        TEXT PRIMARY KEY,
