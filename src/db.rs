@@ -219,6 +219,24 @@ pub fn strip_html_preview_for_test(html: &str) -> String {
 pub async fn insert_email(db: &D1Database, email: &NewEmail<'_>) -> AppResult<bool> {
     let attachments_json = serde_json::to_string(email.attachments)?;
 
+    // D1 单行上限约 1MB。正文在上游已按 MAX_BODY_BYTES（默认 256KB，
+    // 上限 900KB）截断，但 text + html + attachments JSON 是**相加**的，
+    // 两段正文都顶到上限时仍可能超。这里按行总长再做一次兜底截断，
+    // 宁可丢一点尾部，也不能让整条 INSERT 失败（那会连元数据一起丢）。
+    const MAX_ROW_BYTES: usize = 1_000_000;
+    let fixed = email.id.len()
+        + email.message_id.map_or(0, |v| v.len())
+        + email.sender.len()
+        + email.recipient.len()
+        + email.subject.len()
+        + attachments_json.len();
+    let body_budget = MAX_ROW_BYTES.saturating_sub(fixed);
+
+    // 两段正文平分剩余预算；若某段更短，把富余让给另一段。
+    let text_body = crate::util::truncate_utf8(email.text_body.to_string(), body_budget / 2);
+    let remaining = body_budget.saturating_sub(text_body.len());
+    let html_body = crate::util::truncate_utf8(email.html_body.to_string(), remaining);
+
     let stmt = db
         .prepare(
             "INSERT OR IGNORE INTO emails \
@@ -234,8 +252,8 @@ pub async fn insert_email(db: &D1Database, email: &NewEmail<'_>) -> AppResult<bo
             D1Type::Text(email.sender),
             D1Type::Text(email.recipient),
             D1Type::Text(email.subject),
-            D1Type::Text(email.text_body),
-            D1Type::Text(email.html_body),
+            D1Type::Text(&text_body),
+            D1Type::Text(&html_body),
             D1Type::Text(&attachments_json),
             ts(email.created_at),
         ])?;

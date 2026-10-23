@@ -31,6 +31,7 @@ MailFlare/
 ├── Cargo.toml                 # Rust 2024 + workers-rs / mail-parser / jsonwebtoken
 ├── wrangler.toml              # D1 / R2 / vars / [assets] 绑定
 ├── schema.sql                 # D1 建表 + 索引
+├── DEPLOY.md                  # 网页控制台部署指南（连 GitHub）
 ├── package.json               # 前端工具链（bun + TypeScript 7）
 ├── tsconfig.json              # 严格模式 TS 配置
 │
@@ -174,40 +175,51 @@ not_found_handling = "single-page-application" # 前端路由回落 index.html
 
 ## 3. 部署
 
+### 推荐：Cloudflare 网页控制台 + GitHub（无需本地环境）
+
+完整步骤见 **[DEPLOY.md](./DEPLOY.md)**，概要：
+
+1. 控制台创建 D1 数据库 `mailflare`，在 Console 里执行 `schema.sql`
+2. 控制台创建 R2 桶 `mailflare-mail`
+3. Workers → Create → **Connect to Git** 选本仓库
+4. Bindings 里加 `DB`（D1）和 `R2`（R2 bucket）
+5. Variables and Secrets 里加 `ADMIN_PASSWORD` / `JWT_SECRET` / `TURNSTILE_SECRET`（均选 **Secret**）
+6. Deploy
+7. Email Routing → 路由规则 → Send to Worker → 选本 Worker
+
+> 构建命令写在 `wrangler.toml` 的 `[build].command` 里，云端会自动执行
+> `rustup target add` → `cargo install worker-build` → `bun install` →
+> `bun run build` → `worker-build --release`。首次约 3–5 分钟，
+> 之后命中缓存约 1–2 分钟。
+
+### 备选：本地 wrangler
+
 ```bash
-# 0) 工具链
 rustup target add wasm32-unknown-unknown
 cargo install worker-build --version 0.8.7 --locked
-bun install                      # 前端依赖（TypeScript）
-npm i -g wrangler                # 也可以用 bun add -g wrangler
+bun install
 
-# 1) 创建资源
-wrangler d1 create mailflare              # 把输出的 database_id 填进 wrangler.toml
+wrangler d1 create mailflare        # 把 database_id 填进 wrangler.toml
 wrangler r2 bucket create mailflare-mail
-
-# 2) 初始化数据库
 wrangler d1 execute mailflare --remote --file=./schema.sql
 
-# 3) 写入密钥
 wrangler secret put ADMIN_PASSWORD
 wrangler secret put JWT_SECRET
 wrangler secret put TURNSTILE_SECRET
 
-# 4) 部署
 wrangler deploy
-
-# 5) 收信：控制台 → Email Routing → 路由规则 → Send to Worker → 选择本 Worker
 ```
 
 ### 本地开发
 
 ```bash
-wrangler dev --local --test-scheduled
+bun run dev                    # 监听前端 TS，改动自动重建
+wrangler dev --local           # 启动本地 Worker
 wrangler d1 execute mailflare --local --file=./schema.sql
 ```
 
-本地测试收信可以用 `wrangler dev` 的 `--local` 配合 Email Routing 的
-"Send test email"，或直接调用 `POST /cdn-cgi/handler/email`（需 `wrangler` 支持）。
+本地测试收信可用 Email Routing 的 "Send test email"，
+或直接调用 `POST /cdn-cgi/handler/email`（需 `wrangler` 支持）。
 
 ---
 
@@ -349,13 +361,13 @@ TypeScript 只能保证前端内部一致，**跨语言契约靠人工同步**�
 
 ```bash
 # 后端
-cargo test                                      # 34 个测试
+cargo test                                      # 41 个测试
 cargo clippy --all-targets --target wasm32-unknown-unknown   # 零警告
 worker-build --release                          # wasm ~1016KB（gzip 后 ~434KB）
 
 # 前端
 bun run check                                   # tsc 严格模式零错误
-bun run check:render                            # 渲染安全自检（27 项断言）
+bun run check:render                            # 渲染安全自检（35 项断言）
 bun run build                                   # 内联产物 ~17KB JS
 ```
 

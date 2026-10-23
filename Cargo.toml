@@ -2,7 +2,8 @@
 name = "mailflare"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+# worker 0.8.7 自身要求 1.91；floor_char_boundary 也从 1.91 起稳定。
+rust-version = "1.91"
 description = "MailFlare — 极简单用户邮件管理系统（Cloudflare Workers + D1 + R2）"
 license = "MIT"
 

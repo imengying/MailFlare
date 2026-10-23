@@ -87,14 +87,27 @@ pub fn truncate_utf8(s: String, max_bytes: usize) -> String {
         return s;
     }
 
-    let mut end = max_bytes;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    // `truncate` 就地丢弃尾部，不再分配新字符串。
+    const SUFFIX: &str = "\n\n…（内容过长，已截断）";
+
     let mut s = s;
-    s.truncate(end);
-    s.push_str("\n\n…（内容过长，已截断）");
+
+    // 预算比提示语还小：这时提示语本身就放不下，只能硬截断到预算。
+    // 不加这个分支的话会输出「空内容 + 完整提示语」，反而超过上限。
+    if max_bytes <= SUFFIX.len() {
+        let end = s.floor_char_boundary(max_bytes);
+        s.truncate(end);
+        return s;
+    }
+
+    // 截断提示也占字节，必须从预算里扣掉，否则结果会超出 max_bytes——
+    // D1 是按字节判上限的，超一点就可能让整条 INSERT 失败。
+    let budget = max_bytes - SUFFIX.len();
+
+    // `floor_char_boundary` 把下标吸附到最近的 UTF-8 字符边界（Rust 1.99 稳定），
+    // 比手写 while 循环更快也不容易写错。
+    let end = s.floor_char_boundary(budget);
+    s.truncate(end); // 就地丢弃尾部，不再分配新字符串
+    s.push_str(SUFFIX);
     s
 }
 

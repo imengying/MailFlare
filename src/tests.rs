@@ -126,13 +126,51 @@ mod unit {
 
     #[test]
     fn body_is_truncated_on_char_boundary() {
-        // 每个汉字 3 字节，上限 10 字节 -> 只能放 3 个汉字（9 字节）。
-        let text = "一二三四五六七八九十".to_string();
-        let out = util::truncate_utf8(text, 10);
+        // 每个汉字 3 字节 —— 30 个汉字共 90 字节，预算 60 才会真正触发截断。
+        let text = "一二三四五六七八九十".repeat(3);
+        assert_eq!(text.len(), 90);
+        let out = util::truncate_utf8(text, 60);
+
         // 不能出现替换字符（说明切在了字符边界上）。
         assert!(!out.contains('\u{FFFD}'));
         assert!(out.starts_with("一二三"));
-        assert!(out.len() > 10, "应附带截断提示");
+        assert!(out.ends_with("（内容过长，已截断）"));
+        // 关键：截断后的总长度**不得超出**上限，否则 D1 会拒收整条语句。
+        assert!(
+            out.len() <= 60,
+            "截断结果 {} 字节，超过上限 60：{}",
+            out.len(),
+            out
+        );
+    }
+
+    /// 各种极限预算下都不能越界，也不能切坏 UTF-8。
+    #[test]
+    fn truncate_never_exceeds_budget() {
+        let text = "中文abc😀emoji测试".to_string();
+        let suffix_len = "\n\n…（内容过长，已截断）".len();
+
+        for budget in [0usize, 1, 2, 5, 10, 20, 30, 40, suffix_len, suffix_len + 1, 100] {
+            let out = util::truncate_utf8(text.clone(), budget);
+            if budget >= text.len() {
+                assert_eq!(out, text, "budget={budget} 不该截断");
+            } else {
+                assert!(
+                    out.len() <= budget,
+                    "budget={budget} 产出 {} 字节，越界：{out}",
+                    out.len()
+                );
+                // 必须仍是合法 UTF-8（String 本身保证，这里验证没有半个字符）
+                assert!(out.is_char_boundary(out.len()));
+            }
+        }
+    }
+
+    /// 预算比截断提示还小时，不能拼出更长的字符串。
+    #[test]
+    fn truncate_handles_tiny_budget() {
+        let out = util::truncate_utf8("很长很长的内容".to_string(), 4);
+        assert!(out.len() <= 4, "极小预算下也绝不能越界：{} 字节", out.len());
     }
 
     #[test]
@@ -567,5 +605,205 @@ mod id_and_headers {
         let a = crate::util::new_id();
         let b = crate::util::new_id();
         assert_ne!(a, b);
+    }
+}
+
+#[cfg(test)]
+mod markdown_escape {
+    /// 复刻 `notify.rs` 里的两份转义实现（它们不是 pub，测试放这里等价验证）。
+    fn escape_body(input: &str) -> String {
+        let mut out = String::new();
+        for c in input.chars() {
+            if matches!(
+                c,
+                '_' | '*' | '[' | ']' | '(' | ')' | '~' | '`' | '>' | '#' | '+' | '-' | '='
+                    | '|' | '{' | '}' | '.' | '!'
+            ) {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        out
+    }
+
+    fn escape_url(input: &str) -> String {
+        let mut out = String::new();
+        for c in input.chars() {
+            if matches!(c, '\\' | ')') {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        out
+    }
+
+    /// 正文里所有 MarkdownV2 保留字符都必须转义。
+    #[test]
+    fn body_escapes_reserved_chars() {
+        let out = escape_body("a_b*c[d]e(f)g#h+i-j=k|l{m}n.o!p~q`r>s");
+        for ch in [
+            "_", "*", "[", "]", "(", ")", "#", "+", "-", "=", "|", "{", "}", ".", "!", "~", "`",
+            ">",
+        ] {
+            assert!(
+                out.contains(&format!("\\{ch}")),
+                "字符 {ch} 未被转义：{out}"
+            );
+        }
+    }
+
+    /// **关键回归**：URL 里除了 `\` 和 `)` 之外不能加反斜杠。
+    ///
+    /// 之前的实现用正文规则处理 URL，把 `https://a.com/?id=x` 变成了
+    /// `https://a\.com/?id\=x`，用户点开就是坏链接。
+    #[test]
+    fn url_only_escapes_backslash_and_paren() {
+        let url = "https://mail.example.com/?id=01a1647f&x=1#frag";
+        let out = escape_url(url);
+        assert_eq!(out, url, "URL 里不该出现任何多余反斜杠");
+
+        // 真正需要转义的两种情况
+        assert_eq!(escape_url("a)b"), "a\\)b");
+        assert_eq!(escape_url("a\\b"), "a\\\\b");
+    }
+
+    /// 发件人含 `<user_name@domain.com>`：尖括号不是 MarkdownV2 保留字符，
+    /// 但下划线是 —— 必须被转义，否则整条消息 400。
+    #[test]
+    fn sender_with_angle_brackets_and_underscore() {
+        let sender = "张三 <user_name@domain.com>";
+        let out = escape_body(sender);
+        // `_` `.` `>` 都是 MarkdownV2 保留字符，必须转义；
+        // `<` 与 `@` 不是，保持原样。
+        assert_eq!(out, "张三 <user\\_name@domain\\.com\\>");
+    }
+
+    /// 标题含 `/ ? # &` 等 URL 危险字符时，正文转义后仍应可读，
+    /// 且这些字符本身不需要在 MarkdownV2 正文里转义。
+    #[test]
+    fn subject_with_url_special_chars() {
+        let subject = "账单 2025/10 已出?请查收#重要&urgent";
+        let out = escape_body(subject);
+        assert!(out.starts_with("账单 2025/10 已出?请查收\\#重要&urgent"), "{out}");
+    }
+
+    /// 纯文本降级时要把转义反斜杠抹掉，否则用户会看到 `\*` 这种东西。
+    #[test]
+    fn strip_escapes_for_plaintext_fallback() {
+        fn strip(input: &str) -> String {
+            let mut out = String::new();
+            let mut chars = input.chars();
+            while let Some(c) = chars.next() {
+                if c == '\\' {
+                    if let Some(next) = chars.next() {
+                        out.push(next);
+                    }
+                } else {
+                    out.push(c);
+                }
+            }
+            out
+        }
+        assert_eq!(strip("a\\*b\\_c"), "a*b_c");
+        assert_eq!(strip("末尾反斜杠\\"), "末尾反斜杠");
+        assert_eq!(strip("无转义"), "无转义");
+    }
+}
+
+#[cfg(test)]
+mod d1_row_budget {
+    use crate::util::truncate_utf8;
+
+    /// 一行的各分量（用结构体避免 8 个位置参数）。
+    struct Row<'a> {
+        id: &'a str,
+        message_id: Option<&'a str>,
+        sender: &'a str,
+        recipient: &'a str,
+        subject: &'a str,
+        text: &'a str,
+        html: &'a str,
+        attachments_json: &'a str,
+    }
+
+    /// 复刻 `insert_email` 里的行预算算法，验证各种极端输入都不会超 1MB。
+    fn simulate_row_size(row: Row<'_>) -> usize {
+        const MAX_ROW_BYTES: usize = 1_000_000;
+
+        let fixed = row.id.len()
+            + row.message_id.map_or(0, str::len)
+            + row.sender.len()
+            + row.recipient.len()
+            + row.subject.len()
+            + row.attachments_json.len();
+        let body_budget = MAX_ROW_BYTES.saturating_sub(fixed);
+
+        let text_body = truncate_utf8(row.text.to_string(), body_budget / 2);
+        let remaining = body_budget.saturating_sub(text_body.len());
+        let html_body = truncate_utf8(row.html.to_string(), remaining);
+
+        fixed + text_body.len() + html_body.len()
+    }
+
+    #[test]
+    fn oversized_bodies_fit_in_one_row() {
+        // 两段正文都远超上限（模拟超大营销邮件）
+        let text = "文".repeat(500_000); // ~1.5MB
+        let html = "<p>营销</p>".repeat(200_000); // ~2.2MB
+        let size = simulate_row_size(Row {
+            id: "01a1647fb0c1deadbeef0123456789ab",
+            message_id: Some("<abc@example.com>"),
+            sender: "noreply@shop.example.com",
+            recipient: "me@example.com",
+            subject: "双十一大促 · 限时五折",
+            text: &text,
+            html: &html,
+            attachments_json: "[]",
+        });
+        assert!(size <= 1_000_000, "行总长 {size} 超过 D1 上限");
+    }
+
+    #[test]
+    fn normal_sized_mail_is_untouched() {
+        let id = "01a1647fb0c1deadbeef0123456789ab";
+        let sender = "a@b.com";
+        let recipient = "c@d.com";
+        let subject = "测试";
+        let text = "你好，世界";
+        let html = "<p>hello</p>";
+        let attachments = "[]";
+
+        let size = simulate_row_size(Row {
+            id,
+            message_id: None,
+            sender,
+            recipient,
+            subject,
+            text,
+            html,
+            attachments_json: attachments,
+        });
+
+        // 未触发截断时，长度应精确等于各分量字节数之和（无提示语附加）。
+        let expected =
+            id.len() + sender.len() + recipient.len() + subject.len() + text.len() + html.len() + attachments.len();
+        assert_eq!(size, expected, "小邮件不该被截断");
+    }
+
+    #[test]
+    fn huge_attachment_metadata_leaves_room_for_body() {
+        // 极端情况：附件元数据本身就占了几百 KB（几百个附件）
+        let attachments = format!("[{}]", r#"{"index":0,"filename":"a","size":1}"#.repeat(8_000));
+        let size = simulate_row_size(Row {
+            id: "id",
+            message_id: None,
+            sender: "a@b.com",
+            recipient: "c@d.com",
+            subject: "s",
+            text: &"x".repeat(500_000),
+            html: &"y".repeat(500_000),
+            attachments_json: &attachments,
+        });
+        assert!(size <= 1_000_000, "行总长 {size} 超过上限");
     }
 }

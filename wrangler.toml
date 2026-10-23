@@ -1,34 +1,46 @@
 #:schema node_modules/wrangler/config-schema.json
 name = "mailflare"
-# 使用 Workers 新构建系统（wrangler 3.x+ 推荐）。
+
+# Workers 构建产物入口。由 `[build].command` 生成，不要手改。
 main = "build/worker/shim.mjs"
+
 compatibility_date = "2025-01-01"
 workers_dev = true
 
 # ---------------------------------------------------------------------------
-# 构建：worker-build 会把 Rust 编译成 wasm 并生成 build/worker/shim.mjs
+# 构建
+#
+# Cloudflare 的 GitHub 集成会在**云端**执行这条命令，所以它必须是
+# 自包含的：不能假设环境里已装好 Rust 工具链或 bun。
+#
+# 前置条件（在 Cloudflare 控制台的构建配置里设置）：
+#   - 构建变量 Build command:  见下方 command
+#   - 根目录 Deploy command:   npx wrangler deploy
+#
+# 说明：Cloudflare 的构建镜像已内置 Rust 与 wasm32 target，
+# 但默认没有 worker-build。下面用 cargo install 现装（约 1-2 分钟，
+# 会缓存到构建缓存里）。前端用 bun（镜像同样内置）。
 # ---------------------------------------------------------------------------
 [build]
-# 两步：bun 先构建 TypeScript 前端（产物内联进 public/index.html），
-# 再由 worker-build 把 Rust 编成 wasm 并生成 build/worker/shim.mjs。
-#
-# 前端用 bun（不依赖 npm）：`bun run build` 内部调用 Bun.build 打包，
-# 不需要额外的打包器依赖。
-#
-# 首次部署前先装好工具：
-#   cargo install worker-build --version 0.8.7 --locked
-#   bun install
-command = "bun run build && worker-build --release"
+command = """
+rustup target add wasm32-unknown-unknown &&
+cargo install worker-build --version 0.8.7 --locked &&
+bun install &&
+bun run build &&
+worker-build --release
+"""
 
 # ---------------------------------------------------------------------------
 # D1：邮件元数据 + 动态配置
-# 首次部署前先创建再回填 database_id：
+#
+# 这个 database_id 必须换成你自己的：
 #   wrangler d1 create mailflare
+# 或者在控制台 Workers & Pages -> D1 创建后复制 ID。
+# 保持全 0 会导致部署失败（Cloudflare 会报找不到数据库）。
 # ---------------------------------------------------------------------------
 [[d1_databases]]
 binding = "DB"
 database_name = "mailflare"
-# 本地 `wrangler dev` 会自动用它创建 .wrangler/state 下的 SQLite。
 database_id = "00000000-0000-0000-0000-000000000000"
 
 # ---------------------------------------------------------------------------
@@ -41,31 +53,31 @@ bucket_name = "mailflare-mail"
 
 # ---------------------------------------------------------------------------
 # 静态资源：单页前端
-# Workers Static Assets 会先于 Worker 处理匹配的静态文件；`binding = "ASSETS"`
-# 允许在 Worker 内部通过 env.assets("ASSETS") 转发（我们需要它来把 SPA 路由
-# 回落到 index.html，同时让 /api/* 继续走 Rust）。
+#
+# `run_worker_first = true` 让所有请求先经过 Worker：
+#   /api/*   -> Rust 处理
+#   其它路径 -> src/lib.rs 转发给 ASSETS（边缘返回，不进 Rust 逻辑）
+#
+# 不写成数组形式 `["/api/*"]`：旧版 wrangler 会忽略它，届时 SPA 的
+# not_found_handling 会把不存在的 `/api/...` 也回成 index.html，
+# 前端拿到的就不是 JSON 了。布尔形式兼容性最好。
 # ---------------------------------------------------------------------------
 [assets]
 directory = "./public"
 binding = "ASSETS"
-# 所有请求先经过 Worker：
-#   /api/*      -> Rust 处理
-#   其它路径    -> 由 src/lib.rs 转发给 ASSETS（边缘侧直接返回，不经过 Rust 逻辑）
-#
-# 为什么不写成 `run_worker_first = ["/api/*"]`：数组形式的支持依赖较新的
-# wrangler 版本；一旦被忽略，SPA 的 not_found_handling 会把不存在的 `/api/...`
-# 也回成 index.html，前端拿到的就不是 JSON 了。布尔形式在所有支持 [assets]
-# 的版本上都可用，行为最可预测。
 run_worker_first = true
-# 未知路径（前端路由，如 /settings）回落到 index.html。
 not_found_handling = "single-page-application"
 
 # ---------------------------------------------------------------------------
-# 环境变量（非敏感）
-# 敏感项请用 `wrangler secret put`，不要写在这里：
-#   wrangler secret put ADMIN_PASSWORD
-#   wrangler secret put JWT_SECRET
-#   wrangler secret put TURNSTILE_SECRET
+# 环境变量（非敏感项）
+#
+# ⚠️ 敏感项不要写在这里，也不要提交到 GitHub。
+# 通过控制台 Settings -> Variables and Secrets 添加为 **Secret**：
+#   ADMIN_PASSWORD    管理员密码（必填）
+#   JWT_SECRET        HMAC 密钥，建议 openssl rand -base64 48（必填）
+#   TURNSTILE_SECRET  Turnstile secret（留空则跳过人机验证，仅限本地开发）
+#
+# 注意：在控制台设置的同名变量会覆盖这里的值。
 # ---------------------------------------------------------------------------
 [vars]
 # Turnstile 的 site key 是公开值，会下发给前端渲染挂件；留空则前端隐藏验证框。
@@ -100,18 +112,11 @@ PAGE_SIZE_DEFAULT = "20"
 PAGE_SIZE_MAX = "100"
 
 # ---------------------------------------------------------------------------
-# 收信：Cloudflare Email Routing 指向本 Worker 后会自动触发 email 事件。
-# 绑定关系在 Cloudflare 控制台（Email Routing -> 路由规则 -> Send to Worker）配置，
-# 也可以在这里声明（需要先在控制台启用 Email Routing）：
+# 收信
+#
+# Cloudflare Email Routing 指向本 Worker 后会自动触发 email 事件。
+# 绑定在控制台配置：Email Routing -> 路由规则 -> Send to Worker。
+# 语法上也可以用下面这段声明（需先在控制台启用 Email Routing）：
 # ---------------------------------------------------------------------------
 # [[send_email]]
 # name = "MAILER"
-#
-# [env.production]
-# name = "mailflare-prod"
-# routes = [{ pattern = "mail.example.com/*", zone_name = "example.com" }]
-
-# 本地开发时的可观测性
-[observability]
-enabled = true
-head_sampling_rate = 1

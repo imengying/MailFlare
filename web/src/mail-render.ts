@@ -79,18 +79,34 @@ export function buildSrcdoc(html: string, allowRemoteImages: boolean): string {
  * iframe 内部的脚本执行。
  */
 export function addLinkRel(html: string): string {
-  return html.replace(/<a\b([^>]*)>/gi, (match, attrs: string) => {
-    // 已有 rel：保留原值，只补上缺失的两项。
-    const existing = /\brel\s*=\s*(["'])(.*?)\1/i.exec(attrs);
-    if (existing) {
-      const current = existing[2] ?? "";
+  return html.replace(/<a\b([^>]*)>/gi, (_match, attrs: string) => {
+    let next = attrs;
+
+    // ── rel：补齐 noopener / noreferrer ──────────────────────────────
+    const existingRel = /\brel\s*=\s*(["'])(.*?)\1/i.exec(next);
+    if (existingRel) {
+      const current = existingRel[2] ?? "";
       const lower = current.toLowerCase();
       const needs = ["noopener", "noreferrer"].filter((token) => !lower.includes(token));
-      if (needs.length === 0) return match;
-      const merged = current.trim() ? `${current} ${needs.join(" ")}` : needs.join(" ");
-      return `<a${attrs.replace(existing[0], `rel="${merged}"`)}>`;
+      if (needs.length > 0) {
+        const merged = current.trim() ? `${current} ${needs.join(" ")}` : needs.join(" ");
+        next = next.replace(existingRel[0], `rel="${merged}"`);
+      }
+    } else {
+      next += ' rel="noopener noreferrer"';
     }
-    return `<a${attrs} rel="noopener noreferrer">`;
+
+    // ── target：外链必须在新标签打开 ─────────────────────────────────
+    // 没有 target 的链接会在 iframe 内原地跳转，被目标站的
+    // `X-Frame-Options: DENY` 拒绝，用户看到一片空白。
+    // 锚点（`#` 开头）要留在原位：它指向文档内部，不能开新窗口。
+    const href = /\bhref\s*=\s*(["'])(.*?)\1/i.exec(next)?.[2]?.trim() ?? "";
+    const isAnchor = href === "" || href.startsWith("#");
+    if (!isAnchor && !/\btarget\s*=/i.test(next)) {
+      next += ' target="_blank"';
+    }
+
+    return `<a${next}>`;
   });
 }
 

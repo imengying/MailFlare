@@ -86,6 +86,32 @@ console.log("mail-render 安全自检：");
   check("不改动 img 标签", img === '<img src="x.png">', img);
 }
 
+// ── 6. 外链补 target="_blank"（防止 iframe 内原地跳转被 X-Frame-Options 拦截）──
+{
+  const http = addLinkRel('<a href="https://example.com">x</a>');
+  check("http 链接补 target", http.includes('target="_blank"'), http);
+  check("同时补 rel", http.includes("noopener"), http);
+
+  const mailto = addLinkRel('<a href="mailto:a@b.com">m</a>');
+  check("mailto 补 target", mailto.includes('target="_blank"'), mailto);
+
+  // 锚点必须留在原位，不能开新窗口
+  const anchor = addLinkRel('<a href="#section">s</a>');
+  check("锚点不补 target", !anchor.includes('target='), anchor);
+
+  // 已有 target 不覆盖（尊重邮件作者的 _self 等选择）
+  const custom = addLinkRel('<a href="https://a.com" target="_self">x</a>');
+  check("已有 target 不覆盖", custom.includes('target="_self"') && !custom.includes('target="_blank"'), custom);
+
+  // 没有 href 的 <a>（纯锚点）也不该补
+  const noHref = addLinkRel("<a name=\"top\">x</a>");
+  check("无 href 不补 target", !noHref.includes('target='), noHref);
+
+  // 大写标签名 / 大写属性名
+  const upper = addLinkRel('<A HREF="https://a.com">x</A>');
+  check("大写标签也能处理", upper.includes('target="_blank"'), upper);
+}
+
 // ── 5. 远程图片检测 ──────────────────────────────────────────────────
 {
   check("识别 https 图片", hasRemoteImages('<img src="https://t.co/x.gif">'));

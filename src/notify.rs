@@ -96,7 +96,24 @@ async fn fetch_with_timeout(url: Url, init: RequestInit, timeout: Duration) -> R
     }
 }
 
-/// Telegram MarkdownV2 转义。
+/// Telegram MarkdownV2 中 **链接目标（`(...)` 内部）** 的转义。
+///
+/// 官方规则与正文不同：URL 里只需要转义 `\` 和 `)`，其余字符一律原样保留。
+/// 用正文那套「全量转义」处理 URL 会得到
+/// `https://mail\.example\.com/?id\=...` —— 反斜杠会被当成 URL 的一部分，
+/// 用户点开就是 404。这是最容易踩的坑之一。
+fn escape_markdown_v2_url(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() + 4);
+    for c in input.chars() {
+        if matches!(c, '\\' | ')') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Telegram MarkdownV2 正文转义。
 ///
 /// MarkdownV2 要求对一批保留字符加反斜杠，否则整条消息会被 400 拒收。
 fn escape_markdown_v2(input: &str) -> String {
@@ -156,7 +173,7 @@ fn telegram_text(ctx: &PushContext<'_>) -> String {
     if let Some(link) = detail_link(ctx.public_url, &d.id) {
         text.push_str(&format!(
             "\n[在 MailFlare 中查看]({})",
-            escape_markdown_v2(&link)
+            escape_markdown_v2_url(&link)
         ));
     }
 
@@ -168,7 +185,9 @@ fn telegram_text(ctx: &PushContext<'_>) -> String {
 struct TelegramPayload<'a> {
     chat_id: &'a str,
     text: String,
-    parse_mode: &'static str,
+    /// `None` 表示纯文本（不带任何 Markdown 解析）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parse_mode: Option<&'static str>,
     disable_web_page_preview: bool,
 }
 
@@ -176,33 +195,70 @@ struct TelegramPayload<'a> {
 ///
 /// 抽出这一层是为了让「新邮件通知」和「收信失败告警」共用同一套
 /// URL 构造、序列化、超时与错误处理，避免两份容易走样的副本。
+/// 发送一条 Telegram 消息，失败时自动降级为纯文本重试。
+///
+/// ## 为什么需要降级
+/// MarkdownV2 对转义极其苛刻：只要漏掉一个保留字符（邮件标题里出现
+/// 一个未配对的 `*`、发件人名里的 `_`、URL 里的 `)`……），Telegram 就直接
+/// 返回 `400 Bad Request: can't parse entities`，**整条通知丢失**。
+/// 手工转义很难覆盖所有情况，所以这里做两层保险：
+/// 1. 正文与链接分别按官方规则转义（见 `escape_markdown_v2*`）。
+/// 2. 仍然失败（400）时，去掉 `parse_mode` 用**纯文本**重发一次——
+///    宁可丢掉粗体，也不能丢掉通知本身。
 async fn send_telegram_text(settings: &Settings, text: String) -> ChannelResult {
     if settings.telegram_bot_token.is_empty() || settings.telegram_chat_id.is_empty() {
         return ChannelResult::Failed("Telegram token 或 chat_id 未配置".into());
     }
 
+    // 第一次：MarkdownV2（带格式）
+    match post_telegram(settings, &text, Some("MarkdownV2")).await {
+        Ok(200..=299) => ChannelResult::Ok,
+        // 400 基本都来自解析失败 —— 换纯文本再试。
+        Ok(400) => {
+            console_log!("[mailflare] Telegram MarkdownV2 解析失败，降级为纯文本重试");
+            // 纯文本模式下要抹掉转义用的反斜杠，否则用户会看到 `\\*` 这种东西。
+            let plain = strip_markdown_escapes(&text);
+            match post_telegram(settings, &plain, None).await {
+                Ok(200..=299) => ChannelResult::Ok,
+                Ok(code) => ChannelResult::Failed(format!("Telegram 返回 HTTP {code}（纯文本降级也失败）")),
+                Err(e) => ChannelResult::Failed(e),
+            }
+        }
+        Ok(code) => ChannelResult::Failed(format!("Telegram 返回 HTTP {code}")),
+        Err(e) => ChannelResult::Failed(e),
+    }
+}
+
+/// 实际发出 `sendMessage` 请求。
+///
+/// 用 **POST + JSON body**（不是 query string）：标题里的 `/`、`?`、`#`、
+/// `&`、`%` 等字符放进 URL 都需要额外编码，稍有不慎就会被 Telegram 或
+/// 中间层截断；JSON body 完全没有这个问题。
+async fn post_telegram(
+    settings: &Settings,
+    text: &str,
+    parse_mode: Option<&'static str>,
+) -> Result<u16, String> {
     let payload = TelegramPayload {
         chat_id: &settings.telegram_chat_id,
-        text,
-        parse_mode: "MarkdownV2",
+        text: text.to_string(),
+        parse_mode,
         disable_web_page_preview: true,
     };
 
     // token 只含 [0-9A-Za-z:_-]，无需 URL 编码。
-    let Ok(url) = Url::parse(&format!(
+    let url = Url::parse(&format!(
         "https://api.telegram.org/bot{}/sendMessage",
         settings.telegram_bot_token
-    )) else {
-        return ChannelResult::Failed("Telegram bot token 含非法字符".into());
-    };
+    ))
+    .map_err(|_| "Telegram bot token 含非法字符".to_string())?;
 
-    let Ok(body) = serde_json::to_string(&payload) else {
-        return ChannelResult::Failed("Telegram 请求体序列化失败".into());
-    };
+    let body =
+        serde_json::to_string(&payload).map_err(|e| format!("Telegram 请求体序列化失败: {e}"))?;
 
     let headers = worker::Headers::new();
     if headers.set("content-type", "application/json").is_err() {
-        return ChannelResult::Failed("构造请求头失败".into());
+        return Err("构造请求头失败".into());
     }
 
     let mut init = RequestInit::new();
@@ -210,11 +266,24 @@ async fn send_telegram_text(settings: &Settings, text: String) -> ChannelResult 
         .with_headers(headers)
         .with_body(Some(worker::wasm_bindgen::JsValue::from_str(&body)));
 
-    match fetch_with_timeout(url, init, PUSH_TIMEOUT).await {
-        Ok(200..=299) => ChannelResult::Ok,
-        Ok(code) => ChannelResult::Failed(format!("Telegram 返回 HTTP {code}")),
-        Err(e) => ChannelResult::Failed(e),
+    fetch_with_timeout(url, init, PUSH_TIMEOUT).await
+}
+
+/// 去掉 MarkdownV2 转义用的反斜杠（降级为纯文本时使用）。
+fn strip_markdown_escapes(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            // 转义符后面的字符原样输出；末尾孤立的反斜杠直接丢弃。
+            if let Some(next) = chars.next() {
+                out.push(next);
+            }
+        } else {
+            out.push(c);
+        }
     }
+    out
 }
 
 /// Bark v2 推送请求体。
