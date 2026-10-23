@@ -16,7 +16,7 @@ workers_dev = true
 # 控制台构建配置：
 #   Build command:   bun run build
 #   Deploy command:  bunx wrangler deploy
-#   Build variable:  BUN_VERSION=1.4.3
+#   Build variable:  BUN_VERSION=1.4.4
 #
 # scripts/build.sh 负责全部前置工作（装 Rust、加 wasm32 target、
 # 绕开 pkg-config 探测 OpenSSL、装 worker-build、构建前端、编译 wasm），
@@ -43,13 +43,16 @@ database_name = "mailflare"
 migrations_dir = "migrations"
 
 # ---------------------------------------------------------------------------
-# R2：原始 .eml 与附件
+# R2：只存附件字节
 #
-# 同样只写桶名，按名字匹配。前提是在控制台先建好 `mailflare-mail` 桶。
+# **只声明 binding，不写 bucket_name**：桶由用户在控制台自己创建，
+# 再在 Settings -> Bindings 里绑成 `R2`。这样用哪个桶、叫什么名字
+# 完全由用户决定，代码不限制桶名，也不会因为名字对不上而部署失败。
+#
+# 也就是说：附件保存到哪个桶，取决于你在后台把哪个桶绑到了 `R2`。
 # ---------------------------------------------------------------------------
 [[r2_buckets]]
 binding = "R2"
-bucket_name = "mailflare-mail"
 
 # ---------------------------------------------------------------------------
 # 静态资源：单页前端

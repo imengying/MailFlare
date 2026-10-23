@@ -22,9 +22,19 @@
 
 全部在 Cloudflare 网页完成，不需要本地装 Rust 或 wrangler。
 
-### 1. 建 R2 桶
+### 1. 建 R2 桶并绑定
 
-**R2 Object Storage → Create bucket**，名字必须是 `mailflare-mail`。
+**R2 Object Storage → Create bucket**，名字随你取（比如 `my-mail-attachments`）。
+
+然后 **Worker → Settings → Bindings → Add → R2 bucket**：
+
+| 项 | 值 |
+|---|---|
+| Variable name | `R2`（必须是这个） |
+| R2 bucket | 选你刚建的那个桶 |
+
+> **只有变量名 `R2` 是固定的**，桶本身叫什么、放在哪个桶里存附件，
+> 完全由你决定。代码不会去校验桶名。
 
 ### 2. 连 GitHub 部署
 
@@ -34,7 +44,7 @@
 |---|---|
 | Build command | `bun run build` |
 | Deploy command | `bun run deploy` |
-| Build variable | `BUN_VERSION=1.4.3` |
+| Build variable | `BUN_VERSION=1.4.4` |
 
 `bun run deploy` 会依次完成：
 
@@ -44,7 +54,7 @@
 
 所以 **D1 与表结构都是自动建好的**，不需要去控制台 Create，也不用粘 SQL。
 
-绑定关系在 `wrangler.toml` 里已声明（`DB` / `R2`），部署时按名字自动匹配。
+R2 的绑定由你在第 1 步手动配置；如果部署后附件上传报错，先检查这一项。
 
 ### 3. 存储划分
 
@@ -136,7 +146,7 @@ R2 只承担附件，这样 D1 的单行长度不会被附件撑爆。
 
 ## 本地开发
 
-需要 Bun 1.4.3+ 与 Rust（`rust-toolchain.toml` 会自动装 target）。
+需要 Bun 1.4.4+ 与 Rust（`rust-toolchain.toml` 会自动装 target）。
 
 ```bash
 bun install --frozen-lockfile
