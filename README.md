@@ -4,11 +4,11 @@
 
 - **收信**：Email Routing → `mail-parser` 零拷贝解析 → 附件写 R2 → 元数据入库 D1 → `waitUntil()` 异步推送 Telegram / Bark
 - **管理**：Rust API + 内嵌单页前端，用户名 + 密码 + Turnstile 登录，无状态 JWT（HS256）
-- **存储**：D1 两张表（`configs` / `emails`），R2 存原始 `.eml` 与附件
+- **存储**：邮件正文与元数据进 D1（`configs` / `emails` 两张表），附件字节进 R2
 
 ```
    SMTP ──► Email Routing ──► #[event(email)]
-                                ├─► R2   raw/*.eml、att/{id}/{n}
+                                ├─► R2   att/{id}/{n}（仅附件字节）
                                 ├─► D1   emails
                                 └─► waitUntil() ──► Telegram ‖ Bark
 
@@ -22,33 +22,39 @@
 
 全部在 Cloudflare 网页完成，不需要本地装 Rust 或 wrangler。
 
-### 1. 建 D1 并建表
-
-**Workers & Pages → D1 SQL Database → Create**，名字必须是 `mailflare`。
-
-创建后进入数据库 → **Console**，粘贴 [`schema.sql`](./schema.sql) 全文执行。
-执行后应看到两张表：`configs`、`emails`。
-
-### 2. 建 R2 桶
+### 1. 建 R2 桶
 
 **R2 Object Storage → Create bucket**，名字必须是 `mailflare-mail`。
 
-> 上面两步的**名字要与 `wrangler.toml` 里的 `database_name` / `bucket_name`
-> 一致**：部署时 wrangler 按名字自动绑定，找不到同名资源会直接失败。
-> 因为不需要把 Database ID 抄进仓库，也就不存在「占位符忘记替换」的坑。
-
-### 3. 连 GitHub 部署
+### 2. 连 GitHub 部署
 
 **Workers & Pages → Create → Workers → Connect to Git**，选本仓库，根目录 `/`。
 
 | 构建配置 | 值 |
 |---|---|
 | Build command | `bun run build` |
-| Deploy command | `bunx wrangler deploy` |
+| Deploy command | `bun run deploy` |
 | Build variable | `BUN_VERSION=1.4.3` |
 
-绑定关系已在 `wrangler.toml` 里声明（`DB` / `R2`），部署时自动生效，
-**不需要在控制台再手动添加 Binding**。
+`bun run deploy` 会依次完成：
+
+1. **创建 D1 数据库**（已存在则跳过）
+2. **执行 `migrations/` 下的建表 SQL**（已执行过的不会重跑）
+3. 上传 Worker
+
+所以 **D1 与表结构都是自动建好的**，不需要去控制台 Create，也不用粘 SQL。
+
+绑定关系在 `wrangler.toml` 里已声明（`DB` / `R2`），部署时按名字自动匹配。
+
+### 3. 存储划分
+
+| 内容 | 位置 |
+|---|---|
+| 发件人、收件人、主题、纯文本正文、HTML 正文、附件元数据 | **D1** `emails` 表 |
+| 附件原始字节 | **R2** `att/{id}/{index}` |
+
+邮件正文完整保留在 D1（超长时按设置里的「正文入库上限」截断），
+R2 只承担附件，这样 D1 的单行长度不会被附件撑爆。
 
 ### 4. 设三个 Secret
 
@@ -135,7 +141,7 @@
 ```bash
 bun install --frozen-lockfile
 cp .dev.vars.example .dev.vars   # 填 ADMIN_USERNAME / ADMIN_PASSWORD / JWT_SECRET
-bunx wrangler d1 execute mailflare --local --file=./schema.sql
+bunx wrangler d1 migrations apply DB --local
 bun run dev                      # 监听前端 TS，改动自动重建
 bunx wrangler dev                # 另开一个终端起本地 Worker
 ```
@@ -190,7 +196,7 @@ MailFlare/
 │   ├── build.sh               # 云端构建入口
 │   ├── build.ts               # TS → 内联进 public/index.html
 │   └── check-render.ts        # 渲染安全自检
-├── schema.sql                 # D1 建表
+├── migrations/                # D1 建表 SQL（部署时自动执行）
 ├── wrangler.toml              # D1 / R2 / [assets] 绑定
 └── public/index.html          # 构建产物（已 gitignore）
 ```

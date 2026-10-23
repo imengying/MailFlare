@@ -38,6 +38,9 @@ command = "bash scripts/build.sh"
 [[d1_databases]]
 binding = "DB"
 database_name = "mailflare"
+# 迁移目录：`wrangler d1 migrations apply` 会按文件名顺序执行这里未跑过的 SQL，
+# 已执行的记录在 D1 自己的 d1_migrations 表里，重复部署不会重跑。
+migrations_dir = "migrations"
 
 # ---------------------------------------------------------------------------
 # R2：原始 .eml 与附件

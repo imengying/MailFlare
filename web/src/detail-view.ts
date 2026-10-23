@@ -97,16 +97,6 @@ function buildActions(
     actions.append(htmlBtn, textBtn);
   }
 
-  if (detail.raw_url) {
-    const link = create("a", {
-      className: "btn sm",
-      href: detail.raw_url,
-      textContent: "下载 .eml",
-    });
-    link.setAttribute("download", `${detail.id}.eml`);
-    actions.append(link);
-  }
-
   if (detail.message_id) {
     const messageId = detail.message_id;
     const copyBtn = create("button", {

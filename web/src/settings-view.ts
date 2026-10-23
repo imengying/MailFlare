@@ -99,7 +99,6 @@ export function createSettingsController(api: ApiClient): SettingsController {
     area("#blocked-senders").value = settings.blocked_senders.join("\n");
     area("#allowed-recipients").value = settings.allowed_recipients.join("\n");
 
-    check("#store-raw").checked = settings.store_raw_eml;
     num("#max-message").value = String(Math.round(settings.max_message_bytes / MB));
     num("#max-body").value = String(Math.round(settings.max_body_bytes / KB));
     num("#max-attachment").value = String(Math.round(settings.max_attachment_bytes / MB));
@@ -136,7 +135,6 @@ export function createSettingsController(api: ApiClient): SettingsController {
       bark_server: text("#bark-server").value.trim(),
       blocked_senders: parseList(area("#blocked-senders").value),
       allowed_recipients: parseList(area("#allowed-recipients").value),
-      store_raw_eml: check("#store-raw").checked,
     };
 
     // 密钥：只在用户真的输入了内容时才提交（留空 = 不修改）。

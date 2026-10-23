@@ -1,8 +1,10 @@
-//! R2 存储层：原始 `.eml` 与附件的写入 / 流式读取 / 删除。
+//! R2 存储层：**只存附件字节**。
 //!
-//! R2 key 布局（刻意用纯 ASCII，避免中文文件名带来的编码问题）：
+//! 邮件正文、发件人、主题、附件元数据全部在 D1 的 `emails` 表里；
+//! R2 只承担大块的二进制（附件），这样 D1 单行不会因为附件而膨胀。
+//!
+//! key 布局（刻意用纯 ASCII，避免中文文件名带来的编码问题）：
 //! ```text
-//! raw/{email_id}.eml          原始邮件
 //! att/{email_id}/{index}      附件（index 为 MIME 部件序号）
 //! ```
 //! 真实文件名保存在 D1 的 `emails.attachments` JSON 里，下载时写入
@@ -15,12 +17,6 @@ use crate::db::AttachmentMeta;
 use crate::error::{AppError, AppResult};
 use crate::mail::RawAttachment;
 use crate::util::{ascii_filename, percent_encode};
-
-/// 原始邮件对象 key。
-#[inline]
-pub fn raw_key(email_id: &str) -> String {
-    format!("raw/{email_id}.eml")
-}
 
 /// 附件对象 key。
 #[inline]
@@ -105,55 +101,28 @@ pub async fn put_attachment(
     Ok(())
 }
 
-/// 写原始 `.eml` 到 R2。
-///
-/// 入参按值传入：`Vec<u8>` 会被直接转成 R2 的 `Data::Bytes`，
-/// 省掉一次 Rust 侧的大块内存拷贝。
-pub async fn put_raw_eml(bucket: &Bucket, email_id: &str, raw: Vec<u8>) -> AppResult<()> {
-    bucket
-        .put(raw_key(email_id), raw)
-        .http_metadata(HttpMetadata {
-            content_type: Some("message/rfc822".to_string()),
-            content_disposition: Some(format!(
-                "attachment; filename=\"{}.eml\"",
-                ascii_filename(email_id)
-            )),
-            ..Default::default()
-        })
-        .execute()
-        .await?;
-    Ok(())
-}
-
 /// 读取对象用于流式转发。不存在时返回 `None`。
 pub async fn get_object(bucket: &Bucket, key: &str) -> AppResult<Option<Object>> {
     Ok(bucket.get(key).execute().await?)
 }
 
-/// 删除某封邮件在 R2 上的全部对象（原始邮件 + 所有附件）。
+/// 删除某封邮件的全部 R2 附件对象。
 ///
 /// 单次 `deleteMultiple` 最多 1000 个 key，这里按批切分；失败只记日志，
 /// 不让已经删掉的 D1 记录回滚（孤对象可由生命周期规则清理）。
 pub async fn delete_email_objects(
     bucket: &Bucket,
-    email_id: &str,
     attachments: &[AttachmentMeta],
-    store_raw: bool,
 ) {
-    let mut keys: Vec<String> = Vec::with_capacity(attachments.len() + 1);
-    if store_raw {
-        keys.push(raw_key(email_id));
-    }
-    for att in attachments {
-        // 优先用记录里的 key；老数据没有 key 时按约定推导。
-        if att.stored {
-            keys.push(if att.key.is_empty() {
-                attachment_key(email_id, att.index)
-            } else {
-                att.key.clone()
-            });
-        }
-    }
+    // 邮件正文与元数据都在 D1，R2 只存附件。
+    //
+    // `stored = true` 的附件在入库时一定写入了 key（见 inbound 的 process），
+    // 所以这里直接用记录里的 key，不需要再按约定推导。
+    let keys: Vec<String> = attachments
+        .iter()
+        .filter(|att| att.stored && !att.key.is_empty())
+        .map(|att| att.key.clone())
+        .collect();
     if keys.is_empty() {
         return;
     }

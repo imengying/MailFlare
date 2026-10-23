@@ -106,8 +106,6 @@ pub struct Settings {
     pub allowed_recipients: Vec<String>,
 
     // ---- 收信 -----------------------------------------------------------
-    /// 是否把原始 `.eml` 存进 R2。
-    pub store_raw_eml: bool,
     /// 正文入库上限（字节），超出部分截断。
     pub max_body_bytes: i64,
     /// 单封邮件总大小上限（字节），超过直接拒收。
@@ -141,7 +139,6 @@ impl Default for Settings {
             bark_device_key: String::new(),
             blocked_senders: Vec::new(),
             allowed_recipients: Vec::new(),
-            store_raw_eml: true,
             // 256KB 足够展示长邮件；Email Routing 单封上限约 25MB。
             max_body_bytes: 256 * 1024,
             max_message_bytes: 20 * 1024 * 1024,
@@ -222,7 +219,6 @@ impl Settings {
             bark_device_key_hint: hint(&self.bark_device_key),
             blocked_senders: &self.blocked_senders,
             allowed_recipients: &self.allowed_recipients,
-            store_raw_eml: self.store_raw_eml,
             max_body_bytes: self.max_body_bytes,
             max_message_bytes: self.max_message_bytes,
             max_attachment_bytes: self.max_attachment_bytes,
@@ -252,7 +248,6 @@ pub struct SettingsView<'a> {
     pub bark_device_key_hint: &'a str,
     pub blocked_senders: &'a [String],
     pub allowed_recipients: &'a [String],
-    pub store_raw_eml: bool,
     pub max_body_bytes: i64,
     pub max_message_bytes: i64,
     pub max_attachment_bytes: i64,

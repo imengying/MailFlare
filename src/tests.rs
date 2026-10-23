@@ -929,7 +929,6 @@ mod settings_normalize {
         let s: Settings = serde_json::from_str(r#"{"public_url":"https://a.b"}"#).unwrap();
         assert_eq!(s.public_url, "https://a.b");
         assert_eq!(s.page_size_default, 20);
-        assert!(s.store_raw_eml);
         assert_eq!(s.bark_server, "https://api.day.app");
     }
 }

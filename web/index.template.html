@@ -454,12 +454,8 @@
 
     <div class="group">
       <h3>收信</h3>
-      <div class="switch" style="margin-bottom:12px">
-        <input type="checkbox" id="store-raw">
-        <label for="store-raw">保存原始邮件（.eml）</label>
-      </div>
       <p class="hint" style="margin:0 0 12px">
-        关闭后不再往 R2 存原文，后台也无法下载 .eml，可省一些存储。
+        邮件正文与元数据都保存在 D1，只有附件字节写入 R2。
       </p>
       <div class="field">
         <label for="max-message">单封邮件上限</label>

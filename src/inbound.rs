@@ -9,6 +9,11 @@
 //! * 超过「单封邮件上限」的邮件在读取前就 `set_reject`，不让它进入 WASM 堆；
 //!   单个附件超限时跳过转存，只在 D1 留下 `stored=false` 的元数据。
 //! * 附件写 R2 用 `buffer_unordered` 控制并发度；推送整体挂到 `waitUntil`。
+//!
+//! ## 存储划分
+//! D1 里保存完整的邮件（发件人、收件人、主题、纯文本正文、HTML 正文、
+//! 附件元数据），R2 只存**附件字节**。原始 `.eml` 不再单独保存——
+//! 正文已经入库，再存一份原文只会白占空间。
 
 use worker::{console_error, console_log, Bucket, Context, D1Database, Env, ForwardableEmailMessage};
 
@@ -278,17 +283,9 @@ async fn process(
         }
     }
 
-    // ---- 2. 原始 .eml 存 R2 ---------------------------------------------
-    if cfg.store_raw_eml {
-        if let Err(e) = r2::put_raw_eml(bucket, &id, raw).await {
-            // 原文存不下不算致命错误，元数据仍然有价值。
-            console_error!("[mailflare] 原始邮件写入 R2 失败: {e:?}");
-        }
-    } else {
-        // 不保存原文时尽早释放这块可能有 20MB 的缓冲区，降低峰值内存。
-        // （附件已经写进 R2，正文也已经是独立的 String。）
-        drop(raw);
-    }
+    // 原始报文到这里已经用完了：正文/附件都是拥有所有权的独立数据。
+    // 尽早释放这块可能有 20MB 的缓冲区，降低峰值内存。
+    drop(raw);
 
     // ---- 3. 写 D1 -------------------------------------------------------
     // 信封地址比邮件头更权威：Bcc 投递时 To 头可能是空的。
@@ -321,7 +318,7 @@ async fn process(
 
     if !inserted {
         // 幂等去重命中：清掉刚写进 R2 的对象，避免留下孤儿。
-        r2::delete_email_objects(bucket, &id, &metas, cfg.store_raw_eml).await;
+        r2::delete_email_objects(bucket, &metas).await;
         return Ok(None);
     }
 

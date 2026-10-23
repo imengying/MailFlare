@@ -10,7 +10,7 @@
     "build:worker": "bash scripts/build.sh",
     "build": "bash scripts/build.sh",
     "dev": "bun run scripts/build.ts --watch",
-    "deploy": "bash scripts/build.sh && bun x wrangler deploy",
+    "deploy": "bash scripts/build.sh && bun run scripts/deploy.ts",
     "lint": "cargo clippy --all-targets --target wasm32-unknown-unknown -- -D warnings",
     "test": "cargo test && bun run check && bun run check:render",
     "clean": "rm -rf build .cache public/index.html"

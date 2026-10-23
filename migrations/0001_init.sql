@@ -1,19 +1,21 @@
 -- ============================================================================
--- MailFlare · D1 初始化脚本
--- 执行：wrangler d1 execute mailflare --file=./schema.sql --remote
--- 本地：wrangler d1 execute mailflare --file=./schema.sql --local
+-- MailFlare · 初始表结构
+--
+-- 由 `wrangler d1 migrations apply DB --remote` 自动执行，
+-- 不需要手工到控制台粘 SQL。
 -- ============================================================================
 
--- 动态配置表：后台设置（Turnstile、推送、收信限额、分页等）与登录失败计数
--- 全部以 key/value 形式存放。settings 的值是一条 JSON，
--- 这样新增配置项时无需再做数据库迁移。
+-- 动态配置表：后台设置（Turnstile、推送、收信过滤与限额、分页等）
+-- 与登录失败计数全部以 key/value 形式存放。
+-- settings 的值是一条 JSON，这样新增配置项时无需再做数据库迁移。
 CREATE TABLE IF NOT EXISTS configs (
   key        TEXT PRIMARY KEY,
   value      TEXT,
   updated_at INTEGER NOT NULL DEFAULT 0
 );
 
--- 邮件元数据表。正文只存裁剪后的文本/HTML，原始 .eml 与附件放 R2。
+-- 邮件表。正文（纯文本 + HTML）与附件元数据全部在这里，
+-- R2 只存附件字节。
 CREATE TABLE IF NOT EXISTS emails (
   id          TEXT PRIMARY KEY,
   message_id  TEXT,

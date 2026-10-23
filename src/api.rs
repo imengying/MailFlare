@@ -13,7 +13,6 @@
 //! | GET    | /api/attachments/:id     | 流式下载 R2 附件                  |
 //! | GET    | /api/settings            | 读取推送配置（脱敏）              |
 //! | PUT    | /api/settings            | 更新推送配置                      |
-//! | GET    | /api/emails/:id/download | 下载原始 .eml                     |
 
 use serde::{Deserialize, Serialize};
 use worker::{console_error, Bucket, D1Database, Env, Request, Response};
@@ -131,14 +130,6 @@ async fn route(req: &mut Request, ctx: &ApiCtx<'_>, path: &str) -> AppResult<Res
             return Err(AppError::NotFound);
         }
         return get_attachment(req, ctx, object_id).await;
-    }
-    if let Some(rest) = path.strip_prefix("/api/emails/")
-        && let Some(id) = rest.strip_suffix("/download")
-        && !id.is_empty()
-        && !id.contains('/')
-    {
-        require_method(&method, worker::Method::Get)?;
-        return download_raw(req, ctx, id).await;
     }
 
     // ---- 以下接口都需要登录 --------------------------------------------
@@ -364,8 +355,6 @@ struct EmailDetailResponse {
     email: db::EmailDetail,
     /// 每个可下载附件的 URL（只包含成功转存到 R2 的）。
     attachment_urls: Vec<AttachmentUrl>,
-    /// 原始 `.eml` 的下载地址；未开启原文保存时为 `null`。
-    raw_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -410,15 +399,9 @@ async fn get_email(ctx: &ApiCtx<'_>, id: &str) -> AppResult<Response> {
         email.html_body = rewrite_cid(&email.html_body, id, &email.attachments, &dl_token);
     }
 
-    let raw_url = ctx
-        .settings
-        .store_raw_eml
-        .then(|| format!("/api/emails/{id}/download?token={dl_token}"));
-
     Ok(ok_json(&EmailDetailResponse {
         email,
         attachment_urls,
-        raw_url,
     }))
 }
 
@@ -528,7 +511,7 @@ async fn delete_email(ctx: &ApiCtx<'_>, id: &str) -> AppResult<Response> {
 
     // R2 删除失败不阻塞响应，孤对象可由 bucket 生命周期规则兜底清理。
     let bucket = ctx.bucket()?;
-    r2::delete_email_objects(&bucket, id, &attachments, ctx.settings.store_raw_eml).await;
+    r2::delete_email_objects(&bucket, &attachments).await;
 
     Ok(ok_json(&serde_json::json!({ "id": id, "deleted": true })))
 }
@@ -640,37 +623,6 @@ fn sanitize_content_type(raw: &str) -> String {
     }
 }
 
-/// 下载原始 `.eml`。
-///
-/// 与附件一样接受两种凭证，方便前端直接用 `<a download>` 打开。
-async fn download_raw(req: &Request, ctx: &ApiCtx<'_>, id: &str) -> AppResult<Response> {
-    if !ctx.settings.store_raw_eml {
-        return Err(AppError::NotFound);
-    }
-
-    // 下载票据 / Bearer 二选一（浏览器直接打开链接时没有 Authorization 头）。
-    let url = req.url()?;
-    auth::require_attachment_access(req, &url, ctx.cfg, id)?;
-
-    let bucket = ctx.bucket()?;
-    let Some(object) = r2::get_object(&bucket, &r2::raw_key(id)).await? else {
-        return Err(AppError::NotFound);
-    };
-    let Some(body) = object.body() else {
-        return Err(AppError::NotFound);
-    };
-
-    let headers = worker::Headers::new();
-    headers.set("content-type", "message/rfc822")?;
-    headers.set(
-        "content-disposition",
-        &format!("attachment; filename=\"{id}.eml\""),
-    )?;
-    headers.set("cache-control", "no-store")?;
-
-    Ok(Response::from_body(body.response_body()?)?.with_headers(headers))
-}
-
 // ===========================================================================
 // 设置
 // ===========================================================================
@@ -704,8 +656,6 @@ struct SettingsPatch {
 
     blocked_senders: Option<Vec<String>>,
     allowed_recipients: Option<Vec<String>>,
-
-    store_raw_eml: Option<bool>,
     max_body_bytes: Option<i64>,
     max_message_bytes: Option<i64>,
     max_attachment_bytes: Option<i64>,
@@ -742,7 +692,7 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
 
     // 布尔与数值：有值就覆盖。
     apply!(patch => settings;
-        telegram_enabled, bark_enabled, store_raw_eml,
+        telegram_enabled, bark_enabled,
         max_body_bytes, max_message_bytes, max_attachment_bytes, r2_concurrency,
         page_size_default, page_size_max, jwt_ttl_secs,
     );

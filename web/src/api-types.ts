@@ -83,8 +83,6 @@ export type EmailDetail = {
   readonly is_read: boolean;
   readonly created_at: number;
   readonly attachment_urls: AttachmentUrl[];
-  /** 原始 .eml 下载地址；未开启原文保存时为 null。 */
-  readonly raw_url: string | null;
 };
 
 /** `POST /api/auth/login` 的响应。 */
@@ -130,7 +128,6 @@ export interface SettingsView {
   readonly blocked_senders: readonly string[];
   /** 收件人白名单；为空数组表示接收本域任意地址（catch-all）。 */
   readonly allowed_recipients: readonly string[];
-  readonly store_raw_eml: boolean;
   readonly max_body_bytes: number;
   readonly max_message_bytes: number;
   readonly max_attachment_bytes: number;
@@ -160,7 +157,6 @@ export interface SettingsPatch {
   bark_device_key?: string;
   blocked_senders?: string[];
   allowed_recipients?: string[];
-  store_raw_eml?: boolean;
   max_body_bytes?: number;
   max_message_bytes?: number;
   max_attachment_bytes?: number;
