@@ -124,6 +124,13 @@ export interface SettingsView {
   readonly bark_server: string;
   readonly bark_device_key_set: boolean;
   readonly bark_device_key_hint: string;
+  // ---- R2（S3 API）----
+  readonly r2_account_id: string;
+  readonly r2_access_key_id_set: boolean;
+  readonly r2_access_key_id_hint: string;
+  readonly r2_secret_access_key_set: boolean;
+  readonly r2_secret_access_key_hint: string;
+  readonly r2_bucket: string;
   /** 发件人黑名单：`a@b.com` / `@b.com` / `b.com` 三种写法。 */
   readonly blocked_senders: readonly string[];
   /** 收件人白名单；为空数组表示接收本域任意地址（catch-all）。 */
@@ -155,6 +162,10 @@ export interface SettingsPatch {
   bark_enabled?: boolean;
   bark_server?: string;
   bark_device_key?: string;
+  r2_account_id?: string;
+  r2_access_key_id?: string;
+  r2_secret_access_key?: string;
+  r2_bucket?: string;
   blocked_senders?: string[];
   allowed_recipients?: string[];
   max_body_bytes?: number;

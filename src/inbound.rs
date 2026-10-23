@@ -15,7 +15,7 @@
 //! 附件元数据），R2 只存**附件字节**。原始 `.eml` 不再单独保存——
 //! 正文已经入库，再存一份原文只会白占空间。
 
-use worker::{console_error, console_log, Bucket, Context, D1Database, Env, ForwardableEmailMessage};
+use worker::{console_error, console_log, Context, D1Database, Env, ForwardableEmailMessage};
 
 use crate::config::{self, Config, Settings};
 use crate::db::{self, NewEmail};
@@ -47,7 +47,6 @@ pub async fn handle(
     // D1 句柄提前取：既给正常流程用，也给失败告警用。
     // 拿不到就直接返回错误（无法告警也无法入库）。
     let db = env.d1("DB")?;
-    let bucket = env.bucket("R2")?;
 
     // 收信参数全部来自 D1；读取失败时退回默认值而不是拒收，
     // 宁可多存一封邮件，也不要因为设置表读不出来而丢信。
@@ -120,7 +119,6 @@ pub async fn handle(
     match process(
         &cfg,
         &db,
-        &bucket,
         raw,
         &envelope_to,
         &envelope_from,
@@ -211,7 +209,6 @@ fn spawn_alert(
 async fn process(
     cfg: &Settings,
     db: &D1Database,
-    bucket: &Bucket,
     raw: Vec<u8>,
     envelope_to: &str,
     envelope_from: &str,
@@ -264,7 +261,7 @@ async fn process(
         let results: Vec<(usize, AppResult<()>)> = futures_util::stream::iter(uploads)
             .map(|(index, att)| async move {
                 let key = r2::attachment_key(email_id, index);
-                let result = r2::put_attachment(bucket, &key, att, email_id).await;
+                let result = r2::put_attachment(cfg, &key, att, email_id).await;
                 (index, result)
             })
             .buffer_unordered(concurrency)
@@ -318,7 +315,7 @@ async fn process(
 
     if !inserted {
         // 幂等去重命中：清掉刚写进 R2 的对象，避免留下孤儿。
-        r2::delete_email_objects(bucket, &metas).await;
+        r2::delete_email_objects(cfg, &metas).await;
         return Ok(None);
     }
 

@@ -15,7 +15,7 @@
 //! | PUT    | /api/settings            | 更新推送配置                      |
 
 use serde::{Deserialize, Serialize};
-use worker::{console_error, Bucket, D1Database, Env, Request, Response};
+use worker::{console_error, D1Database, Env, Request, Response};
 
 use crate::auth::{self, SCOPE_DL};
 use crate::config::{self, Config, Settings};
@@ -39,10 +39,6 @@ pub struct ApiCtx<'a> {
 impl<'a> ApiCtx<'a> {
     fn db(&self) -> AppResult<D1Database> {
         Ok(self.env.d1("DB")?)
-    }
-
-    fn bucket(&self) -> AppResult<Bucket> {
-        Ok(self.env.bucket("R2")?)
     }
 }
 
@@ -510,8 +506,7 @@ async fn delete_email(ctx: &ApiCtx<'_>, id: &str) -> AppResult<Response> {
     };
 
     // R2 删除失败不阻塞响应，孤对象可由 bucket 生命周期规则兜底清理。
-    let bucket = ctx.bucket()?;
-    r2::delete_email_objects(&bucket, &attachments).await;
+    r2::delete_email_objects(ctx.settings, &attachments).await;
 
     Ok(ok_json(&serde_json::json!({ "id": id, "deleted": true })))
 }
@@ -520,18 +515,26 @@ async fn delete_email(ctx: &ApiCtx<'_>, id: &str) -> AppResult<Response> {
 // 附件下载 / 原始邮件下载
 // ===========================================================================
 
-/// 流式读取 R2 附件。
+/// 流式读取 R2 附件（经 S3 API）。
 ///
-/// 用 `ResponseBody::Stream` 把 R2 的 `ReadableStream` 直接交给运行时转发：
-/// 附件字节**不经过 WASM 堆**，既不会触发 128MB 内存上限，也不消耗 CPU 时间。
+/// ## 零拷贝
+/// 全程**不调用** `bytes().await`：附件可能有几十 MB，读进 WASM 线性内存
+/// 既慢又会顶到 128MB 上限。做法是从上游响应里取出 `ResponseBody::Stream`，
+/// 直接交给运行时转发，字节不经过 Rust 堆。
+///
+/// ## 为什么要重建响应而不是改上游 headers
+/// `Fetch::send()` 返回的响应在 Workers 运行时里 **headers 是不可变的**，
+/// 直接 `headers_mut().set()` 会抛 `TypeError: Can't modify immutable headers`。
+/// 所以用 `into_parts()` 把 body 取出来，配一个全新的 `ResponseBuilder` 重建。
 async fn get_attachment(req: &Request, ctx: &ApiCtx<'_>, object_id: &str) -> AppResult<Response> {
     let (email_id, index) = r2::parse_attachment_id(object_id)?;
 
     let url = req.url()?;
-    // 鉴权：登录态或针对本邮件的下载票据。
+    // 1. 前置鉴权：登录态或针对本邮件的下载票据。
+    //    必须在任何上游请求**之前**完成，避免成为探测工具。
     auth::require_attachment_access(req, &url, ctx.cfg, email_id)?;
 
-    // 先查元数据，确认该附件确实属于这封邮件（防止越权探测任意 R2 key）。
+    // 2. 查元数据，确认该附件确实属于这封邮件（防止越权探测任意 R2 key）。
     let db = ctx.db()?;
     let metas = db::get_attachments(&db, email_id)
         .await?
@@ -544,26 +547,46 @@ async fn get_attachment(req: &Request, ctx: &ApiCtx<'_>, object_id: &str) -> App
         return Err(AppError::NotFound);
     }
 
-    let bucket = ctx.bucket()?;
     let key = if meta.key.is_empty() {
         r2::attachment_key(email_id, index)
     } else {
         meta.key.clone()
     };
-    let Some(object) = r2::get_object(&bucket, &key).await? else {
+
+    // 3. 把客户端的 Range 头透传给 S3（不参与签名）。
+    let range = req.headers().get("range").ok().flatten();
+    let Some(upstream) =
+        r2::get_attachment(ctx.settings, &key, range.as_deref()).await?
+    else {
         return Err(AppError::NotFound);
     };
-    let Some(body) = object.body() else {
-        return Err(AppError::NotFound);
+    let status = upstream.status_code();
+
+    // 4. 先把需要的上游响应头复制成独立 String，再取 body。
+    //    顺序很重要：`headers()` 借用了 `upstream`，而 `into_parts()` 会把它
+    //    移走，所以必须先把值拷出来（这几个头都很短，拷贝成本可忽略）。
+    let (content_range, upstream_length, etag, accept_ranges) = {
+        let h = upstream.headers();
+        (
+            h.get("content-range").ok().flatten(),
+            h.get("content-length").ok().flatten(),
+            h.get("etag").ok().flatten(),
+            h.get("accept-ranges").ok().flatten(),
+        )
     };
 
+    // `into_parts()` 直接搬走 ResponseBody（Stream 变体是 ReadableStream），
+    // 不经过任何字节拷贝。
+    let (_, body) = upstream.into_parts();
+
+    // 5. 重建响应：状态码透传（200 / 206），头部我们说了算。
     let headers = worker::Headers::new();
+
     // 只有图片/PDF 才允许 inline，其余一律 attachment，避免 HTML/SVG 型 XSS。
     let inline = meta.inline && r2::inline_allowed(&meta.content_type);
-    // 解析出来的 content-type 可能带引号/中文等非法头字符，先清洗成纯 ASCII
-    // token，否则 `headers.set` 会失败并变成 500。
+    // 优先用 D1 里记录的 MIME（我们入库时已经清洗过）；缺失时退回上游的。
     let content_type = if inline {
-        sanitize_content_type(&meta.content_type)
+        r2::sanitize_content_type(&meta.content_type)
     } else {
         "application/octet-stream".to_string()
     };
@@ -572,20 +595,12 @@ async fn get_attachment(req: &Request, ctx: &ApiCtx<'_>, object_id: &str) -> App
         "content-disposition",
         &r2::content_disposition(&meta.filename, inline),
     )?;
-    headers.set("x-content-type-options", "nosniff")?;
-    // 私有内容：中间层不缓存，浏览器可缓存 10 分钟（token 有效期 600s）。
-    headers.set("cache-control", "private, max-age=600")?;
-    // 跨域部署时，浏览器默认不会把 Content-Disposition 暴露给 JS，
-    // 前端就拿不到文件名。显式放开（仅这两个头，不放开整个响应）。
-    headers.set(
-        "access-control-expose-headers",
-        "content-disposition, content-length",
-    )?;
 
-    // CSP 对**所有**附件都设，不只 inline：
-    // 即使 Content-Disposition 因为某种原因退化、浏览器选择内联渲染，
-    // `default-src 'none'` 也能确保里面的脚本不会执行。
-    // inline 的情况额外允许 data: 图片（邮件正文里的内嵌图）。
+    // 三大安全头：对所有附件都设，不只 inline。
+    headers.set("x-content-type-options", "nosniff")?;
+    // 即使 Content-Disposition 退化成内联渲染，`default-src 'none'`
+    // 也能确保里面的脚本不会执行。inline 时额外允许 data: 图片
+    // （邮件正文里的内嵌图）。
     headers.set(
         "content-security-policy",
         if inline {
@@ -595,32 +610,40 @@ async fn get_attachment(req: &Request, ctx: &ApiCtx<'_>, object_id: &str) -> App
         },
     )?;
 
-    // 交给运行时直接 pipe，零拷贝转发。
-    Ok(Response::from_body(body.response_body()?)?.with_headers(headers))
-}
-
-/// 把 MIME 类型清洗成可安全写进响应头的 ASCII 形式。
-///
-/// 只保留 `type/subtype` 与合法参数，其它字符一律丢弃；实在解析不出来就
-/// 退回 `application/octet-stream`（宁可让浏览器下载，也不写出畸形响应头）。
-fn sanitize_content_type(raw: &str) -> String {
-    let head = raw.split(';').next().unwrap_or("").trim();
-    let mut parts = head.splitn(2, '/');
-    let ty = parts.next().unwrap_or("");
-    let sub = parts.next().unwrap_or("");
-
-    let valid = |s: &str| {
-        !s.is_empty()
-            && s.len() <= 64
-            && s.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'+' | b'-' | b'_'))
-    };
-
-    if valid(ty) && valid(sub) {
-        format!("{ty}/{sub}")
-    } else {
-        "application/octet-stream".to_string()
+    // Range 续传相关头部：206 时把 Content-Range 透传回去，
+    // 否则浏览器无法知道拿到的是哪一段，断点续传会坏。
+    headers.set(
+        "accept-ranges",
+        accept_ranges.as_deref().unwrap_or("bytes"),
+    )?;
+    if let Some(value) = content_range {
+        headers.set("content-range", &value)?;
     }
+    // 长度必须透传：206 时上游给的是分片长度，不是对象总长。
+    if let Some(value) = upstream_length {
+        headers.set("content-length", &value)?;
+    }
+    // 上游若给了 ETag，透传出去让浏览器能走条件请求。
+    if let Some(etag) = etag {
+        headers.set("etag", &etag)?;
+    }
+
+    // 私有内容：中间层不缓存，浏览器可缓存 10 分钟（下载票据有效期 600s）。
+    headers.set("cache-control", "private, max-age=600")?;
+    // 浏览器默认不会把 Content-Disposition 暴露给 JS，前端就拿不到文件名。
+    // 只放开这几个头，不放开整个响应。
+    headers.set(
+        "access-control-expose-headers",
+        "content-disposition, content-length, content-range, accept-ranges",
+    )?;
+
+    // 6. 用新的头部 + 上游的流式 body 组装响应。
+    //    `Response::from_body` 直接接管 `ResponseBody`（Stream 变体是
+    //    ReadableStream），全程零拷贝。`with_status` 透传 200 / 206，
+    //    206 时浏览器才能正确拼接续传片段。
+    Ok(Response::from_body(body)?
+        .with_headers(headers)
+        .with_status(status))
 }
 
 // ===========================================================================
@@ -653,6 +676,11 @@ struct SettingsPatch {
     bark_enabled: Option<bool>,
     bark_server: Option<String>,
     bark_device_key: Option<String>,
+
+    r2_account_id: Option<String>,
+    r2_access_key_id: Option<String>,
+    r2_secret_access_key: Option<String>,
+    r2_bucket: Option<String>,
 
     blocked_senders: Option<Vec<String>>,
     allowed_recipients: Option<Vec<String>>,
@@ -701,6 +729,7 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
     apply!(patch => settings;
         public_url, turnstile_site_key, turnstile_hostname,
         telegram_chat_id, bark_server,
+        r2_account_id, r2_bucket,
     );
 
     // 密钥字段：仅当值不含 `*` 时才覆盖，防止把脱敏占位符写回去。
@@ -708,6 +737,8 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
     config::merge_secret(&mut settings.turnstile_secret, patch.turnstile_secret);
     config::merge_secret(&mut settings.telegram_bot_token, patch.telegram_bot_token);
     config::merge_secret(&mut settings.bark_device_key, patch.bark_device_key);
+    config::merge_secret(&mut settings.r2_access_key_id, patch.r2_access_key_id);
+    config::merge_secret(&mut settings.r2_secret_access_key, patch.r2_secret_access_key);
 
     // 地址列表：整表替换（前端提交完整数组，不支持逐项增删——
     // 列表项之间没有稳定标识，做增量合并反而容易错）。
@@ -761,6 +792,28 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
         return Err(AppError::BadRequest(format!(
             "地址规则「{bad}」格式不正确：请填 a@b.com、@b.com 或 b.com"
         )));
+    }
+    // R2 四项要么全空（不用附件功能），要么全填；填一半最难排查。
+    let r2_filled = [
+        !settings.r2_account_id.is_empty(),
+        !settings.r2_access_key_id.is_empty(),
+        !settings.r2_secret_access_key.is_empty(),
+        !settings.r2_bucket.is_empty(),
+    ];
+    let count = r2_filled.iter().filter(|v| **v).count();
+    if count != 0 && count != 4 {
+        return Err(AppError::BadRequest(
+            "R2 的四项（账号 ID / Access Key / Secret Key / 桶名）必须同时填写或同时留空".into(),
+        ));
+    }
+    // 账号 ID 是 32 位十六进制；填成邮箱或 URL 会导致请求 404 且难排查。
+    if !settings.r2_account_id.is_empty()
+        && !(settings.r2_account_id.len() == 32
+            && settings.r2_account_id.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Err(AppError::BadRequest(
+            "R2 账号 ID 应是 32 位十六进制字符串（可在控制台右侧栏或 R2 页面找到）".into(),
+        ));
     }
     if settings.turnstile_enabled() && settings.turnstile_site_key.is_empty() {
         return Err(AppError::BadRequest(

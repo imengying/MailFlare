@@ -93,6 +93,16 @@ pub struct Settings {
     pub bark_server: String,
     pub bark_device_key: String,
 
+    // ---- R2（S3 API）------------------------------------------------------
+    /// Cloudflare 账号 ID：S3 端点主机名是 `{account_id}.r2.cloudflarestorage.com`。
+    pub r2_account_id: String,
+    /// R2 的 Access Key ID。
+    pub r2_access_key_id: String,
+    /// R2 的 Secret Access Key。
+    pub r2_secret_access_key: String,
+    /// 桶名，由用户自己填。
+    pub r2_bucket: String,
+
     // ---- 收信过滤 -------------------------------------------------------
     /// 发件人黑名单。
     ///
@@ -137,6 +147,10 @@ impl Default for Settings {
             bark_enabled: false,
             bark_server: "https://api.day.app".to_string(),
             bark_device_key: String::new(),
+            r2_account_id: String::new(),
+            r2_access_key_id: String::new(),
+            r2_secret_access_key: String::new(),
+            r2_bucket: String::new(),
             blocked_senders: Vec::new(),
             allowed_recipients: Vec::new(),
             // 256KB 足够展示长邮件；Email Routing 单封上限约 25MB。
@@ -169,6 +183,11 @@ impl Settings {
             self.bark_server = "https://api.day.app".to_string();
         }
 
+        self.r2_account_id = self.r2_account_id.trim().to_string();
+        self.r2_access_key_id = self.r2_access_key_id.trim().to_string();
+        self.r2_secret_access_key = self.r2_secret_access_key.trim().to_string();
+        self.r2_bucket = self.r2_bucket.trim().trim_matches('/').to_string();
+
         // 地址列表：统一小写、去空格、丢空项、去重。
         self.blocked_senders = normalize_list(self.blocked_senders);
         self.allowed_recipients = normalize_list(self.allowed_recipients);
@@ -196,6 +215,14 @@ impl Settings {
         !self.turnstile_secret.is_empty()
     }
 
+    /// R2 是否已配置完整（四项都填了才能用 S3 API）。
+    pub fn r2_configured(&self) -> bool {
+        !self.r2_account_id.is_empty()
+            && !self.r2_access_key_id.is_empty()
+            && !self.r2_secret_access_key.is_empty()
+            && !self.r2_bucket.is_empty()
+    }
+
     /// 推送消息里的站点地址；空串归一成 `None`。
     pub fn public_url(&self) -> Option<&str> {
         (!self.public_url.is_empty()).then_some(self.public_url.as_str())
@@ -217,6 +244,12 @@ impl Settings {
             bark_server: &self.bark_server,
             bark_device_key_set: !self.bark_device_key.is_empty(),
             bark_device_key_hint: hint(&self.bark_device_key),
+            r2_account_id: &self.r2_account_id,
+            r2_access_key_id_set: !self.r2_access_key_id.is_empty(),
+            r2_access_key_id_hint: hint(&self.r2_access_key_id),
+            r2_secret_access_key_set: !self.r2_secret_access_key.is_empty(),
+            r2_secret_access_key_hint: hint(&self.r2_secret_access_key),
+            r2_bucket: &self.r2_bucket,
             blocked_senders: &self.blocked_senders,
             allowed_recipients: &self.allowed_recipients,
             max_body_bytes: self.max_body_bytes,
@@ -246,6 +279,12 @@ pub struct SettingsView<'a> {
     pub bark_server: &'a str,
     pub bark_device_key_set: bool,
     pub bark_device_key_hint: &'a str,
+    pub r2_account_id: &'a str,
+    pub r2_access_key_id_set: bool,
+    pub r2_access_key_id_hint: &'a str,
+    pub r2_secret_access_key_set: bool,
+    pub r2_secret_access_key_hint: &'a str,
+    pub r2_bucket: &'a str,
     pub blocked_senders: &'a [String],
     pub allowed_recipients: &'a [String],
     pub max_body_bytes: i64,

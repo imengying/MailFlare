@@ -26,6 +26,7 @@ mod jwt;
 mod mail;
 mod notify;
 mod r2;
+mod s3sign;
 mod util;
 
 #[cfg(test)]

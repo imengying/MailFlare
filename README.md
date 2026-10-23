@@ -4,11 +4,11 @@
 
 - **收信**：Email Routing → `mail-parser` 零拷贝解析 → 附件写 R2 → 元数据入库 D1 → `waitUntil()` 异步推送 Telegram / Bark
 - **管理**：Rust API + 内嵌单页前端，用户名 + 密码 + Turnstile 登录，无状态 JWT（HS256）
-- **存储**：邮件正文与元数据进 D1（`configs` / `emails` 两张表），附件字节进 R2
+- **存储**：邮件正文与元数据进 D1（`configs` / `emails`），附件字节进 R2（S3 API）
 
 ```
    SMTP ──► Email Routing ──► #[event(email)]
-                                ├─► R2   att/{id}/{n}（仅附件字节）
+                                ├─► R2   mail/att/{id}/{n}（S3 API）
                                 ├─► D1   emails
                                 └─► waitUntil() ──► Telegram ‖ Bark
 
@@ -22,19 +22,17 @@
 
 全部在 Cloudflare 网页完成，不需要本地装 Rust 或 wrangler。
 
-### 1. 建 R2 桶并绑定
+### 1. 建 R2 桶并生成 API 令牌
 
-**R2 Object Storage → Create bucket**，名字随你取（比如 `my-mail-attachments`）。
+**R2 Object Storage → Create bucket**，名字随你取。
 
-然后 **Worker → Settings → Bindings → Add → R2 bucket**：
+然后在 **R2 → Manage R2 API Tokens → Create API Token** 生成一对
+Access Key ID / Secret Access Key（权限选 **Object Read & Write**，
+资源范围选这个桶）。这两项连同**账号 ID**、**桶名**，等会儿在网页设置里填。
 
-| 项 | 值 |
-|---|---|
-| Variable name | `R2`（必须是这个） |
-| R2 bucket | 选你刚建的那个桶 |
-
-> **只有变量名 `R2` 是固定的**，桶本身叫什么、放在哪个桶里存附件，
-> 完全由你决定。代码不会去校验桶名。
+> 不需要在 `wrangler.toml` 里声明 `[[r2_buckets]]`，也不需要去
+> Settings → Bindings 绑定。附件走的是 R2 的 S3 API，四项配置都存在 D1 里，
+> 随时可改，改完即时生效。
 
 ### 2. 连 GitHub 部署
 
@@ -53,8 +51,7 @@
 3. 上传 Worker
 
 所以 **D1 与表结构都是自动建好的**，不需要去控制台 Create，也不用粘 SQL。
-
-R2 的绑定由你在第 1 步手动配置；如果部署后附件上传报错，先检查这一项。
+R2 的四项配置（见第 6 步）在网页里填。
 
 ### 3. 存储划分
 
@@ -119,6 +116,7 @@ R2 只承担附件，这样 D1 的单行长度不会被附件撑爆。
 | 站点地址 | 推送消息里「查看详情」链接的前缀，留空则不带链接 |
 | Turnstile | Site Key + Secret 都填才会在登录页显示验证框；留空则只剩密码一道防线 |
 | Telegram / Bark | 推送渠道，Token 留空表示不修改 |
+| R2 存储 | 账号 ID、Access Key、Secret Key、桶名（附件都放在桶内 `mail/att/`） |
 | 收信过滤 | 发件人黑名单、收件人白名单 |
 | 收信 | 单封大小上限、正文截断阈值、附件上限、上传并发 |
 | 列表与会话 | 每页条数、登录有效期 |
@@ -178,7 +176,8 @@ bunx wrangler dev                # 另开一个终端起本地 Worker
 | 部署报找不到 D1 | `database_id` 还是全 0，或没绑 `DB` |
 | 登录页报 500 | 三个 Secret 没设全，错误信息会指明缺哪个 |
 | 收信没反应 | 检查 Email Routing 路由规则、MX 记录，以及 Worker 的 `Logs` 实时流 |
-| 附件 404 | R2 绑定名不是 `R2` |
+| 附件报「R2 未配置完整」 | 进「设置 → R2 存储」，四项都要填 |
+| 附件上传 403 | Access Key 没有该桶的写权限，或账号 ID 填错 |
 
 ---
 

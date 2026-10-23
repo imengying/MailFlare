@@ -95,6 +95,22 @@ export function createSettingsController(api: ApiClient): SettingsController {
       "设备 Key",
     );
 
+    // R2：账号 ID 与桶名是明文，回填；两个密钥只更新 placeholder。
+    text("#r2-account").value = settings.r2_account_id;
+    text("#r2-bucket").value = settings.r2_bucket;
+    fillSecret(
+      "#r2-access-key",
+      settings.r2_access_key_id_set,
+      settings.r2_access_key_id_hint,
+      "R2 API 令牌的 Access Key ID",
+    );
+    fillSecret(
+      "#r2-secret-key",
+      settings.r2_secret_access_key_set,
+      settings.r2_secret_access_key_hint,
+      "R2 API 令牌的 Secret Access Key",
+    );
+
     // 地址列表：一行一条，最直观也最容易从别处整段粘贴。
     area("#blocked-senders").value = settings.blocked_senders.join("\n");
     area("#allowed-recipients").value = settings.allowed_recipients.join("\n");
@@ -133,6 +149,8 @@ export function createSettingsController(api: ApiClient): SettingsController {
       telegram_chat_id: text("#tg-chat").value.trim(),
       bark_enabled: check("#bark-enabled").checked,
       bark_server: text("#bark-server").value.trim(),
+      r2_account_id: text("#r2-account").value.trim(),
+      r2_bucket: text("#r2-bucket").value.trim(),
       blocked_senders: parseList(area("#blocked-senders").value),
       allowed_recipients: parseList(area("#allowed-recipients").value),
     };
@@ -146,6 +164,12 @@ export function createSettingsController(api: ApiClient): SettingsController {
 
     const barkKey = text("#bark-key").value.trim();
     if (barkKey) patch.bark_device_key = barkKey;
+
+    const r2AccessKey = text("#r2-access-key").value.trim();
+    if (r2AccessKey) patch.r2_access_key_id = r2AccessKey;
+
+    const r2SecretKey = text("#r2-secret-key").value.trim();
+    if (r2SecretKey) patch.r2_secret_access_key = r2SecretKey;
 
     // 数值项：清空或非法时不提交，后端保留原值。
     const maxMessage = readNumber("#max-message", MB);

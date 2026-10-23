@@ -429,6 +429,38 @@
     </div>
 
     <div class="group">
+      <h3>R2 存储（附件）</h3>
+      <p class="hint" style="margin:0 0 12px">
+        附件通过 R2 的 S3 API 存取，四项都填才能用。桶名由你自己决定，
+        附件统一放在桶内的 <code>mail/att/</code> 目录下。
+      </p>
+      <div class="field">
+        <label for="r2-account">账号 ID</label>
+        <input class="input" id="r2-account" autocomplete="off"
+               placeholder="32 位十六进制，如 a1b2c3d4e5f6..."
+               spellcheck="false" autocapitalize="off">
+        <span class="hint">Cloudflare 控制台右侧栏的 Account ID。</span>
+      </div>
+      <div class="field">
+        <label for="r2-access-key">Access Key ID</label>
+        <input class="input" id="r2-access-key" type="password" autocomplete="off"
+               placeholder="R2 API 令牌的 Access Key ID">
+        <span class="hint" id="r2-access-key-hint"></span>
+      </div>
+      <div class="field">
+        <label for="r2-secret-key">Secret Access Key</label>
+        <input class="input" id="r2-secret-key" type="password" autocomplete="off"
+               placeholder="R2 API 令牌的 Secret Access Key">
+        <span class="hint" id="r2-secret-key-hint"></span>
+      </div>
+      <div class="field">
+        <label for="r2-bucket">桶名</label>
+        <input class="input" id="r2-bucket" autocomplete="off" placeholder="my-mail-attachments">
+        <span class="hint">填你在 R2 里建好的桶名，不需要在这里改 wrangler 配置。</span>
+      </div>
+    </div>
+
+    <div class="group">
       <h3>收信过滤</h3>
       <div class="field">
         <label for="blocked-senders">发件人黑名单</label>
