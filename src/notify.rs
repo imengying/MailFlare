@@ -29,8 +29,6 @@ pub struct PushEmail {
 pub struct PushContext<'a> {
     pub settings: &'a Settings,
     pub email: &'a PushEmail,
-    /// 管理页地址，用于消息里附上「查看详情」链接（可为空）。
-    pub public_url: Option<&'a str>,
 }
 
 #[derive(Debug)]
@@ -85,20 +83,6 @@ async fn fetch_with_timeout(url: Url, init: RequestInit, timeout: Duration) -> R
     }
 }
 
-/// 链接目标（`(...)` 内）只转义 `\` 和 `)`。
-///
-/// 用正文那套全量转义会得到 `https://a\.b/?id\=1`，反斜杠进入 URL，点了 404。
-fn escape_markdown_v2_url(input: &str) -> String {
-    let mut out = String::with_capacity(input.len() + 4);
-    for c in input.chars() {
-        if matches!(c, '\\' | ')') {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
-}
-
 /// 保留字符不加反斜杠会被 Telegram 以 400 拒收。
 fn escape_markdown_v2(input: &str) -> String {
     let mut out = String::with_capacity(input.len() + 16);
@@ -123,11 +107,6 @@ fn short_sender(sender: &str) -> &str {
     }
 }
 
-/// 详情页链接。
-fn detail_link(public_url: Option<&str>, id: &str) -> Option<String> {
-    public_url.map(|base| format!("{}/?id={}", base.trim_end_matches('/'), id))
-}
-
 /// 构造 Telegram 消息文本（已转义）。
 ///
 /// 推送只为验证码服务，所以正文只保留「谁发的、什么主题」这类定位信息，
@@ -145,13 +124,6 @@ fn telegram_text(ctx: &PushContext<'_>) -> String {
     let name = short_sender(&d.sender);
     text.push_str(&format!("*来自*：{}\n", escape_markdown_v2(name)));
     text.push_str(&format!("*主题*：{}\n", escape_markdown_v2(&d.subject)));
-
-    if let Some(link) = detail_link(ctx.public_url, &d.id) {
-        text.push_str(&format!(
-            "\n[在 MailFlare 中查看]({})",
-            escape_markdown_v2_url(&link)
-        ));
-    }
 
     // 硬性截断，保证不超过 Telegram 的 4096 上限。
     truncate_utf8(text, TG_TEXT_LIMIT)
@@ -269,17 +241,10 @@ struct BarkPayload<'a> {
     title: String,
     body: String,
     group: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    url: Option<String>,
 }
 
 /// 发送一条 Bark 消息。同样抽成原语供告警复用。
-async fn send_bark_text(
-    settings: &Settings,
-    title: String,
-    body: String,
-    url: Option<String>,
-) -> ChannelResult {
+async fn send_bark_text(settings: &Settings, title: String, body: String) -> ChannelResult {
     if settings.bark_device_key.is_empty() {
         return ChannelResult::Failed("Bark device key 未配置".into());
     }
@@ -289,7 +254,6 @@ async fn send_bark_text(
         title,
         body,
         group: "MailFlare",
-        url,
     };
 
     // 统一走 POST {server}/push：对长文本与特殊字符最安全。
@@ -338,7 +302,6 @@ async fn push_bark(ctx: &PushContext<'_>) -> ChannelResult {
         s,
         format!("🔑 {} {}", code.label, code.value),
         format!("{}\n{}", short_sender(&ctx.email.sender), ctx.email.subject),
-        detail_link(ctx.public_url, &ctx.email.id),
     )
     .await
 }
@@ -457,7 +420,7 @@ pub async fn alert_inbound_failure(
         },
         async {
             if settings.bark_enabled {
-                send_bark_text(&settings, "⚠️ MailFlare 收信告警".to_string(), bark_body, None)
+                send_bark_text(&settings, "⚠️ MailFlare 收信告警".to_string(), bark_body)
                     .await
             } else {
                 ChannelResult::Skipped
@@ -497,7 +460,6 @@ mod tests {
         PushContext {
             settings,
             email,
-            public_url: None,
         }
     }
 

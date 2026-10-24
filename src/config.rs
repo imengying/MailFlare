@@ -60,8 +60,6 @@ pub struct Settings {
     pub site_logo: String,
     /// 登录页背景（CSS `background` 值，可以是颜色或图片 URL）。
     pub site_background: String,
-    /// 推送消息里「查看详情」链接的前缀。
-    pub public_url: String,
 
     // ---- Turnstile ------------------------------------------------------
     /// 公开值，下发给前端渲染挂件。
@@ -112,7 +110,6 @@ impl Default for Settings {
             site_name: "MailFlare".to_string(),
             site_logo: String::new(),
             site_background: String::new(),
-            public_url: String::new(),
             turnstile_site_key: String::new(),
             turnstile_secret: String::new(),
             telegram_enabled: false,
@@ -147,7 +144,6 @@ impl Settings {
         if self.site_name.is_empty() {
             self.site_name = "MailFlare".to_string();
         }
-        self.public_url = self.public_url.trim().trim_end_matches('/').to_string();
         self.turnstile_site_key = self.turnstile_site_key.trim().to_string();
         self.turnstile_secret = self.turnstile_secret.trim().to_string();
         self.telegram_bot_token = self.telegram_bot_token.trim().to_string();
@@ -196,18 +192,12 @@ impl Settings {
             && !self.r2_bucket.is_empty()
     }
 
-    /// 空串归一成 `None`。
-    pub fn public_url(&self) -> Option<&str> {
-        (!self.public_url.is_empty()).then_some(self.public_url.as_str())
-    }
-
     /// 密钥只回传「是否已设置」+ 尾部提示。
     pub fn redacted(&self) -> SettingsView<'_> {
         SettingsView {
             site_name: &self.site_name,
             site_logo: &self.site_logo,
             site_background: &self.site_background,
-            public_url: &self.public_url,
             turnstile_site_key: &self.turnstile_site_key,
             turnstile_secret_set: !self.turnstile_secret.is_empty(),
             turnstile_secret_hint: hint(&self.turnstile_secret),
@@ -242,7 +232,6 @@ pub struct SettingsView<'a> {
     pub site_name: &'a str,
     pub site_logo: &'a str,
     pub site_background: &'a str,
-    pub public_url: &'a str,
     pub turnstile_site_key: &'a str,
     pub turnstile_secret_set: bool,
     pub turnstile_secret_hint: &'a str,

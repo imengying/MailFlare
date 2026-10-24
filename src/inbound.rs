@@ -128,7 +128,7 @@ pub async fn handle(
                 email.attachments.len()
             );
             // 推送不阻塞收信：SMTP 侧已经可以拿到成功响应。
-            spawn_push(&cfg, &env, ctx, email);
+            spawn_push(&env, ctx, email);
         }
         Ok(None) => {
             // 重复投递：静默成功，发信方无需重试。
@@ -328,9 +328,7 @@ async fn process(
 }
 
 /// 把推送任务挂到 `waitUntil` 上。
-fn spawn_push(settings: &Settings, env: &Env, ctx: Context, email: db::EmailDetail) {
-    let public_url = settings.public_url().map(|s| s.to_string());
-
+fn spawn_push(env: &Env, ctx: Context, email: db::EmailDetail) {
     // 提前裁好一小段预览：别让几百 KB 的正文一直活在 waitUntil 的 future 里。
     let preview_source = if email.text_body.is_empty() {
         email.html_body
@@ -369,7 +367,6 @@ fn spawn_push(settings: &Settings, env: &Env, ctx: Context, email: db::EmailDeta
         let ctx = PushContext {
             settings: &settings,
             email: &push_email,
-            public_url: public_url.as_deref(),
         };
         notify::dispatch(&ctx).await;
     });

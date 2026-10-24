@@ -697,7 +697,6 @@ struct SettingsPatch {
     site_name: Option<String>,
     site_logo: Option<String>,
     site_background: Option<String>,
-    public_url: Option<String>,
 
     turnstile_site_key: Option<String>,
     turnstile_secret: Option<String>,
@@ -759,7 +758,7 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
     // 非密钥字符串：有值就覆盖（空串即清空）。
     apply!(patch => settings;
         site_name, site_logo, site_background,
-        public_url, turnstile_site_key,
+        turnstile_site_key,
         telegram_chat_id, bark_server,
         r2_account_id, r2_bucket,
     );
@@ -798,18 +797,16 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
             return Err(AppError::BadRequest(format!("{label}地址格式不合法")));
         }
     }
-    if settings.public_url.contains('?') || settings.public_url.contains('#') {
-        return Err(AppError::BadRequest(
-            "站点地址不能包含 ? 或 #，请只填协议 + 域名（可带路径）".into(),
-        ));
-    }
-    if !settings.public_url.is_empty()
-        && !settings.public_url.starts_with("https://")
-        && !settings.public_url.starts_with("http://")
-    {
-        return Err(AppError::BadRequest(
-            "站点地址必须以 http:// 或 https:// 开头".into(),
-        ));
+    // Logo 与背景现在都只接受 https 图片地址。
+    for (label, value) in [("Logo", &settings.site_logo), ("背景", &settings.site_background)] {
+        if !value.is_empty() && !value.to_ascii_lowercase().starts_with("https://") {
+            return Err(AppError::BadRequest(format!(
+                "{label}地址必须以 https:// 开头"
+            )));
+        }
+        if !value.is_empty() && !safe_image_source(value) {
+            return Err(AppError::BadRequest(format!("{label}地址格式不合法")));
+        }
     }
     if !settings.bark_server.starts_with("https://") && !settings.bark_server.starts_with("http://")
     {

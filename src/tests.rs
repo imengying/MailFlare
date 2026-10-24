@@ -820,14 +820,12 @@ mod settings_normalize {
     #[test]
     fn trims_and_strips_trailing_slash() {
         let s = Settings {
-            public_url: "  https://mail.example.com/  ".into(),
             turnstile_site_key: "  0xABC  ".into(),
             bark_server: "https://api.day.app/".into(),
             ..Default::default()
         }
         .normalized();
 
-        assert_eq!(s.public_url, "https://mail.example.com");
         assert_eq!(s.turnstile_site_key, "0xABC");
         assert_eq!(s.bark_server, "https://api.day.app");
     }
@@ -890,19 +888,6 @@ mod settings_normalize {
     }
 
     #[test]
-    fn public_url_empty_becomes_none() {
-        let s = Settings::default();
-        assert_eq!(s.public_url(), None);
-
-        let s = Settings {
-            public_url: "https://mail.example.com".into(),
-            ..Default::default()
-        }
-        .normalized();
-        assert_eq!(s.public_url(), Some("https://mail.example.com"));
-    }
-
-    #[test]
     fn redacted_hides_secrets_but_shows_tail() {
         let s = Settings {
             turnstile_secret: "0xSECRETVALUE".into(),
@@ -924,8 +909,8 @@ mod settings_normalize {
     #[test]
     fn missing_fields_fall_back_to_defaults() {
         // 结构体级 #[serde(default)]：旧记录缺字段也能读出来。
-        let s: Settings = serde_json::from_str(r#"{"public_url":"https://a.b"}"#).unwrap();
-        assert_eq!(s.public_url, "https://a.b");
+        let s: Settings = serde_json::from_str(r#"{"site_name":"OnlyName"}"#).unwrap();
+        assert_eq!(s.site_name, "OnlyName");
         assert_eq!(s.page_size_default, 20);
         assert_eq!(s.bark_server, "https://api.day.app");
     }
@@ -980,11 +965,11 @@ mod settings_patch {
     fn normalization_applies_after_merge() {
         // 合并后要跑一遍归一化：空格与尾斜杠都得处理掉。
         let settings = Settings {
-            public_url: "  https://mail.example.com/ ".into(),
+            bark_server: "  https://api.day.app/ ".into(),
             ..Default::default()
         }
         .normalized();
-        assert_eq!(settings.public_url, "https://mail.example.com");
+        assert_eq!(settings.bark_server, "https://api.day.app");
     }
 }
 

@@ -121,7 +121,6 @@ export interface SettingsView {
   readonly site_logo: string;
   /** 仅支持 https 图片地址；空串表示默认背景。 */
   readonly site_background: string;
-  readonly public_url: string;
   readonly turnstile_site_key: string;
   readonly turnstile_secret_set: boolean;
   readonly turnstile_secret_hint: string;
@@ -163,7 +162,6 @@ export interface SettingsPatch {
   site_name?: string;
   site_logo?: string;
   site_background?: string;
-  public_url?: string;
   turnstile_site_key?: string;
   turnstile_secret?: string;
   telegram_enabled?: boolean;
