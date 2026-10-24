@@ -1,26 +1,21 @@
 /**
- * 设置页。
- *
- * 所有可配置项都在这里（除管理员账号与 JWT 密钥——那三项在
- * Worker 环境变量里，改一次要重新部署）。
- *
- * 关键语义（与后端 `SettingsPatch` 的 `Option<T>` 对齐）：
- * - 密钥输入框**留空** = 不修改（后端把 `None` 当作「保持不变」）
- * - 密钥输入框填入新值 = 覆盖
- * - 后端只回传脱敏值（`*_set` / `*_hint`），所以前端不能把占位符回传
+ * 右侧设置工作区：邮件列表保持不变，只切换详情列的内容。
  */
 
 import type { SettingsPatch, SettingsView } from "./api-types.ts";
 import type { ApiClient } from "./api-client.ts";
-import { el } from "./dom.ts";
+import { el, isMobile } from "./dom.ts";
+import { confirmDialog } from "./ui.ts";
 
 export interface SettingsController {
   open(): Promise<void>;
-  close(): void;
-  /** 保存；成功后自动返回。 */
+  /** 返回 false 表示取消关闭或正在保存。 */
+  close(): Promise<boolean>;
+  /** 保存后停留在设置工作区。 */
   save(): Promise<void>;
-  /** 当前是否正在显示。 */
   isOpen(): boolean;
+  /** 登出时清除页面状态与未完成的打开请求。 */
+  reset(): void;
 }
 
 /** 字节 → MB 的换算（表单用 MB 展示，后端用字节存储）。 */
@@ -42,35 +37,83 @@ function parseList(raw: string): string[] {
 
 export function createSettingsController(
   api: ApiClient,
-  /** 设置加载完成后回调，用于同步站点外观等副作用。 */
   afterOpen?: (settings: SettingsView) => void,
+  onViewChange?: (open: boolean) => void,
 ): SettingsController {
   const view = (): HTMLElement => el<HTMLElement>("#settings-view");
+  const form = (): HTMLFormElement => el<HTMLFormElement>("#settings-form");
   const errBox = (): HTMLElement => el<HTMLElement>("#settings-err");
-
+  const status = (): HTMLElement => el<HTMLElement>("#settings-status");
   const text = (sel: string): HTMLInputElement => el<HTMLInputElement>(sel);
-
-  const showApp = (): void => {
-    view().hidden = true;
-    el<HTMLElement>("#app-view").hidden = false;
-    // 焦点从被隐藏的表单移走，但不要触发手机浏览器的自动滚动。
-    el<HTMLElement>("#list-title").focus({ preventScroll: true });
-  };
-
   const area = (sel: string): HTMLTextAreaElement => el<HTMLTextAreaElement>(sel);
   const num = (sel: string): HTMLInputElement => el<HTMLInputElement>(sel);
   const check = (sel: string): HTMLInputElement => el<HTMLInputElement>(sel);
 
-  document.querySelectorAll<HTMLAnchorElement>(".settings-nav a").forEach((link) => {
-    link.addEventListener("click", (event) => {
-      event.preventDefault();
-      const target = document.querySelector<HTMLElement>(link.hash);
-      if (!target) return;
-      const scroller = view();
-      const top = scroller.scrollTop + target.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 110;
-      scroller.scrollTo({ top, behavior: "smooth" });
-    });
+  let opened = false;
+  let dirty = false;
+  let loading = false;
+  let saving = false;
+  let confirming = false;
+  let requestVersion = 0;
+  let saveVersion = 0;
+
+  const setDirty = (value: boolean): void => {
+    dirty = value;
+    status().textContent = value ? "有未保存的更改" : "设置更改会在保存后生效";
+    status().classList.toggle("dirty", value);
+  };
+
+  const show = (open: boolean): void => {
+    opened = open;
+    onViewChange?.(open);
+    if (open) {
+      el<HTMLElement>("#settings-title").focus({ preventScroll: true });
+    } else {
+      const target = isMobile() ? "#list-title" : "#open-settings";
+      el<HTMLElement>(target).focus({ preventScroll: true });
+    }
+  };
+
+  const close = async (): Promise<boolean> => {
+    if (saving || confirming) return false;
+    if (!opened) {
+      requestVersion += 1;
+      loading = false;
+      return true;
+    }
+    if (dirty) {
+      confirming = true;
+      try {
+        const discard = await confirmDialog(
+          "放弃未保存的更改？",
+          "当前设置尚未保存，返回邮件后将丢失这些修改。",
+          "放弃更改",
+        );
+        if (!discard) return false;
+      } finally {
+        confirming = false;
+      }
+    }
+    requestVersion += 1;
+    setDirty(false);
+    show(false);
+    return true;
+  };
+
+  form().addEventListener("input", () => {
+    if (opened) setDirty(true);
   });
+  el<HTMLButtonElement>("#settings-back").addEventListener("click", () => {
+    void close();
+  });
+
+  const setControlsDisabled = (disabled: boolean): void => {
+    form().querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea").forEach((control) => {
+      control.disabled = disabled;
+    });
+    el<HTMLButtonElement>("#settings-back").disabled = disabled;
+    el<HTMLButtonElement>("#settings-save").disabled = disabled;
+  };
 
   /**
    * 密钥输入框的统一处理：永不回填明文，只更新 placeholder。
@@ -229,49 +272,77 @@ export function createSettingsController(
 
   return {
     async open(): Promise<void> {
+      if (loading || saving || opened) return;
+      loading = true;
+      const request = ++requestVersion;
       errBox().textContent = "";
       try {
-        const settings = await api.request<SettingsView>("/api/settings");
-        fill(settings);
-        el<HTMLElement>("#app-view").hidden = true;
-        view().hidden = false;
-        view().scrollTop = 0;
-        window.scrollTo(0, 0);
-        el<HTMLElement>("#settings-title").focus({ preventScroll: true });
-        afterOpen?.(settings);
+        const loaded = await api.request<SettingsView>("/api/settings");
+        if (request !== requestVersion) return;
+        fill(loaded);
+        setDirty(false);
+        el<HTMLElement>(".settings-content").scrollTop = 0;
+        show(true);
+        afterOpen?.(loaded);
       } catch (error) {
-        // 加载失败就停在原页面，用 toast 提示，不切到一个空表单。
+        if (request === requestVersion) {
+          errBox().textContent = error instanceof Error ? error.message : "设置加载失败";
+          show(true);
+        }
         throw error;
+      } finally {
+        if (request === requestVersion) loading = false;
       }
     },
 
-    close(): void {
-      showApp();
-    },
+    close,
 
     isOpen(): boolean {
-      return !view().hidden;
+      return opened || loading;
+    },
+
+    reset(): void {
+      requestVersion += 1;
+      saveVersion += 1;
+      opened = false;
+      loading = false;
+      saving = false;
+      confirming = false;
+      setDirty(false);
+      setControlsDisabled(false);
+      el<HTMLButtonElement>("#settings-save").removeAttribute("aria-busy");
+      onViewChange?.(false);
     },
 
     async save(): Promise<void> {
+      if (!opened || saving) return;
+      saving = true;
+      const request = ++saveVersion;
+      const patch = collect();
       const button = el<HTMLButtonElement>("#settings-save");
       errBox().textContent = "";
-      button.disabled = true;
+      setControlsDisabled(true);
       button.setAttribute("aria-busy", "true");
       try {
-        await api.request<SettingsView>("/api/settings", {
+        const saved = await api.request<SettingsView>("/api/settings", {
           method: "PUT",
-          body: collect(),
+          body: patch,
         });
-        showApp();
-        // 交由外层处理 toast 与外观刷新，避免这里依赖 ui 模块。
+        if (request !== saveVersion) return;
+        fill(saved);
+        setDirty(false);
+        status().textContent = "所有更改已保存";
         view().dispatchEvent(new CustomEvent("settings-saved", { bubbles: true }));
       } catch (error) {
+        if (request !== saveVersion) return;
         errBox().textContent = error instanceof Error ? error.message : "保存失败";
-        view().scrollTo({ top: 0, behavior: "smooth" });
+        el<HTMLElement>(".settings-content").scrollTo({ top: 0, behavior: "smooth" });
       } finally {
-        button.disabled = false;
-        button.removeAttribute("aria-busy");
+        if (request === saveVersion) {
+          saving = false;
+          setControlsDisabled(false);
+          button.removeAttribute("aria-busy");
+        }
       }
     },
   };

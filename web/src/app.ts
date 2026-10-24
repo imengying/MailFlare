@@ -24,6 +24,10 @@ let turnstile: TurnstileWidget = noopWidget();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 let detailRequest = 0;
+let settingsReturn: { filter: "all" | "unread"; mobileShowing: boolean } = {
+  filter: "all",
+  mobileShowing: false,
+};
 
 // ===========================================================================
 // 视图切换
@@ -57,6 +61,37 @@ function closeDetail(): void {
   if (isMobile()) el<HTMLElement>("#detail-pane").scrollTop = 0;
 }
 
+function syncMailNavigation(): void {
+  document.querySelectorAll<HTMLElement>(".nav-item[data-filter]").forEach((node) => {
+    const active = !settings.isOpen() && node.dataset["filter"] === state.filter;
+    node.classList.toggle("active", active);
+    if (active) node.setAttribute("aria-current", "page");
+    else node.removeAttribute("aria-current");
+  });
+}
+
+function setSettingsView(open: boolean): void {
+  const app = el<HTMLElement>("#app-view");
+  el<HTMLElement>("#settings-view").hidden = !open;
+  el<HTMLElement>("#detail-pane").hidden = open;
+  app.classList.toggle("settings-open", open);
+  el<HTMLElement>("#open-settings").classList.toggle("active", open);
+  if (open) {
+    settingsReturn = {
+      filter: state.filter,
+      mobileShowing: app.classList.contains("showing"),
+    };
+    app.classList.add("showing");
+    el<HTMLElement>("#open-settings").setAttribute("aria-current", "page");
+  } else {
+    state.filter = settingsReturn.filter;
+    el<HTMLElement>("#list-title").textContent = state.filter === "unread" ? "未读邮件" : "全部邮件";
+    app.classList.toggle("showing", settingsReturn.mobileShowing);
+    el<HTMLElement>("#open-settings").removeAttribute("aria-current");
+  }
+  syncMailNavigation();
+}
+
 function setLoginBusy(busy: boolean): void {
   const button = el<HTMLButtonElement>("#login-btn");
   button.disabled = busy;
@@ -69,9 +104,10 @@ function showLogin(): void {
   stopPolling();
   detailRequest += 1;
   setSidebarOpen(false);
+  settings.reset();
   el<HTMLElement>("#app-view").hidden = true;
+  el<HTMLElement>("#app-view").classList.remove("showing");
   el<HTMLElement>("#login-view").hidden = false;
-  el<HTMLElement>("#settings-view").hidden = true;
   state.detail = null;
   state.selectedId = null;
   state.items = [];
@@ -79,7 +115,6 @@ function showLogin(): void {
 
 async function enterApp(): Promise<void> {
   el<HTMLElement>("#login-view").hidden = true;
-  el<HTMLElement>("#settings-view").hidden = true;
   el<HTMLElement>("#app-view").hidden = false;
   setSidebarOpen(false);
   try {
@@ -139,6 +174,7 @@ const listHandlers = {
 // ===========================================================================
 
 async function openEmail(id: string): Promise<void> {
+  if (settings.isOpen() && !(await settings.close())) return;
   const request = ++detailRequest;
   state.selectedId = id;
   state.activeTab = "html";
@@ -241,6 +277,7 @@ async function deleteEmail(id: string): Promise<void> {
 }
 
 async function markAllRead(): Promise<void> {
+  if (settings.isOpen() && !(await settings.close())) return;
   if (state.unread === 0) {
     toast("没有未读邮件");
     return;
@@ -337,14 +374,12 @@ async function initLoginPage(): Promise<void> {
   }
 }
 
-/** 重新拉取设置并应用外观（保存后或登录后调用）。 */
+/** 重新拉取公开配置并应用外观（保存后或登录后调用）。 */
 async function refreshAppearance(): Promise<void> {
   try {
-    const loaded = await api.request<{ site_name: string; site_logo: string; site_background: string }>(
-      "/api/settings",
-    );
-    applySiteIdentity(loaded);
-    applyLoginBackground(loaded.site_background);
+    const config = await api.request<AuthConfig>("/api/auth/config");
+    applySiteIdentity(config);
+    applyLoginBackground(config.site_background);
   } catch {
     // 外观刷新失败不影响主流程。
   }
@@ -422,11 +457,28 @@ async function copyText(text: string): Promise<void> {
 // 事件绑定
 // ===========================================================================
 
-const settings = createSettingsController(api, (loaded) => {
-  // 打开设置页时立刻按服务端值渲染一次，便于确认当前外观。
-  applySiteIdentity(loaded);
-});
+const settings = createSettingsController(
+  api,
+  (loaded) => {
+    applySiteIdentity(loaded);
+  },
+  setSettingsView,
+);
 
+async function changeFilter(button: HTMLElement): Promise<void> {
+  if (settings.isOpen() && !(await settings.close())) return;
+  const filter = button.dataset["filter"];
+  state.filter = filter === "unread" ? "unread" : "all";
+  el<HTMLElement>("#list-title").textContent = state.filter === "unread" ? "未读邮件" : "全部邮件";
+  syncMailNavigation();
+  setSidebarOpen(false);
+  detailRequest += 1;
+  state.selectedId = null;
+  state.detail = null;
+  renderDetailEmpty();
+  closeDetail();
+  await loadList({ reset: true });
+}
 
 function bindEvents(): void {
   el<HTMLFormElement>("#login-form").addEventListener("submit", (event) => {
@@ -438,9 +490,7 @@ function bindEvents(): void {
     void settings.save();
   });
 
-  el<HTMLElement>("#settings-back").addEventListener("click", () => settings.close());
-
-  // 保存成功后重新应用外观，站点名与背景立刻生效。
+  // 保存成功后重新应用外观，停留在右侧设置工作区。
   el<HTMLElement>("#settings-view").addEventListener("settings-saved", () => {
     toast("设置已保存");
     void refreshAppearance();
@@ -448,7 +498,13 @@ function bindEvents(): void {
 
   el<HTMLElement>("#open-settings").addEventListener("click", () => {
     setSidebarOpen(false);
-    void settings.open().catch((error: unknown) => toast(errorMessage(error)));
+    if (settings.isOpen()) {
+      void settings.close();
+      return;
+    }
+    if (api.getToken()) {
+      void settings.open().catch((error: unknown) => toast(errorMessage(error)));
+    }
   });
 
   el<HTMLElement>("#logout").addEventListener("click", () => {
@@ -466,27 +522,7 @@ function bindEvents(): void {
 
   document.querySelectorAll<HTMLElement>(".nav-item[data-filter]").forEach((button) => {
     button.addEventListener("click", () => {
-      document
-        .querySelectorAll(".nav-item[data-filter]")
-        .forEach((node) => {
-          node.classList.remove("active");
-          node.removeAttribute("aria-current");
-        });
-      button.classList.add("active");
-      button.setAttribute("aria-current", "page");
-
-      const filter = button.dataset["filter"];
-      state.filter = filter === "unread" ? "unread" : "all";
-      el<HTMLElement>("#list-title").textContent =
-        state.filter === "unread" ? "未读邮件" : "全部邮件";
-
-      setSidebarOpen(false);
-      detailRequest += 1;
-      state.selectedId = null;
-      state.detail = null;
-      renderDetailEmpty();
-      closeDetail();
-      void loadList({ reset: true }).catch((error: unknown) => toast(errorMessage(error)));
+      void changeFilter(button).catch((error: unknown) => toast(errorMessage(error)));
     });
   });
 
@@ -497,6 +533,7 @@ function bindEvents(): void {
   el<HTMLButtonElement>("#refresh").addEventListener("click", (event) => {
     const button = event.currentTarget as HTMLButtonElement;
     void (async () => {
+      if (settings.isOpen() && !(await settings.close())) return;
       button.disabled = true;
       button.classList.add("is-spinning");
       try {
@@ -542,7 +579,7 @@ function bindEvents(): void {
     }
     if (event.key === "Escape") {
       if (settings.isOpen()) {
-        settings.close();
+        void settings.close();
         return;
       }
       if (el<HTMLElement>("#sidebar").classList.contains("open")) {

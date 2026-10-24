@@ -56,7 +56,7 @@ pub struct Settings {
     // ---- 站点 -----------------------------------------------------------
     /// 站点名，显示在登录页与侧栏。
     pub site_name: String,
-    /// 站点 Logo。留空则用默认的 ✉；填了按图片 URL 处理。
+    /// 站点 Logo。留空使用默认邮件图标；填了按图片 URL 处理。
     pub site_logo: String,
     /// 登录页背景（CSS `background` 值，可以是颜色或图片 URL）。
     pub site_background: String,
@@ -439,7 +439,7 @@ pub async fn load_settings(db: &D1Database) -> AppResult<Settings> {
     Ok(serde_json::from_str::<Settings>(&raw)
         .map(Settings::normalized)
         .unwrap_or_else(|e| {
-            // 配置被人工改坏时不该让整个设置页 500，退回默认值并记一条日志。
+            // 配置被人工改坏时退回默认值，避免整个设置接口返回 500。
             worker::console_error!("[mailflare] settings 解析失败，使用默认值: {e}");
             Settings::default()
         }))

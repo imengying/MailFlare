@@ -145,7 +145,6 @@
   .err { color: var(--danger); font-size: 12.5px; line-height: 1.5; min-height: 19px; margin: 0 0 8px; }
   .err:empty { margin-bottom: 0; }
   .login-submit { width: 100%; min-height: 44px; margin-top: 3px; }
-  .login-submit > .icon { margin-left: auto; width: 16px; }
   #turnstile-container { min-height: 65px; }
   #turnstile-container > div { margin: auto; }
 
@@ -177,7 +176,8 @@
 
   .split { display: grid; grid-template-columns: minmax(300px, 370px) minmax(0, 1fr); flex: 1; min-height: 0; }
   .list-pane { border-right: 1px solid var(--border); overflow-y: auto; overscroll-behavior: contain; background: var(--surface); min-height: 0; }
-  .detail-pane { overflow-y: auto; overscroll-behavior: contain; min-height: 0; display: flex; flex-direction: column; }
+  .detail-pane, #settings-view { min-width: 0; min-height: 0; }
+  .detail-pane { overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; }
   .mail-item { display: block; width: 100%; text-align: left; border: none; background: transparent; padding: 17px 18px 16px; border-bottom: 1px solid var(--border); color: inherit; position: relative; transition: background .13s; }
   .mail-item:hover { background: var(--surface-2); }
   .mail-item.selected { background: var(--accent-soft); }
@@ -241,24 +241,41 @@
   .imgbar button { margin-left: auto; }
   .detail-back { display: none; }
 
-  #settings-view { height: 100dvh; background: var(--bg); overflow-y: auto; }
-  .page { width: min(940px, 100%); margin: 0 auto; padding: 0 32px 72px; }
-  .page-head { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px; min-height: 94px; padding: 20px 0 17px; background: color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter: blur(16px); border-bottom: 1px solid var(--border); }
-  .page-heading h2 { margin: 0; font-size: 22px; line-height: 1.3; letter-spacing: -.4px; }
-  .page-heading p { margin: 4px 0 0; color: var(--text-faint); font-size: 12px; }
-  .settings-nav { display: flex; align-items: center; gap: 6px; padding: 17px 0 4px; overflow-x: auto; }
-  .settings-nav a { flex: 0 0 auto; padding: 5px 11px; border-radius: 7px; color: var(--text-dim); font-size: 12px; }
-  .settings-nav a:hover { text-decoration: none; background: var(--surface-3); color: var(--text); }
-  .page-body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px; padding-top: 16px; }
-  .group { min-width: 0; border: 1px solid var(--border); border-radius: 14px; padding: 22px; background: var(--surface); box-shadow: var(--shadow); scroll-margin-top: 110px; }
-  .group.span-2 { grid-column: 1 / -1; }
-  .group h3 { margin: 0 0 19px; font-size: 14px; font-weight: 650; display: flex; align-items: center; gap: 9px; }
-  .group h3 .icon { width: 17px; height: 17px; color: var(--accent); }
-  .group-description { margin: -8px 0 18px; }
-  .fields-grid-body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 20px; }
-  .group .switch { margin-bottom: 20px; }
-  .appearance-fields { grid-template-columns: minmax(160px, .7fr) minmax(0, 1.3fr); }
-  .appearance-fields .field:last-child { grid-column: 1 / -1; }
+  #settings-view { overflow: hidden; display: flex; flex-direction: column; background: var(--bg); }
+  .settings-form { width: min(920px, 100%); height: 100%; min-height: 0; margin: 0 auto; display: flex; flex-direction: column; }
+  .settings-head { display: flex; align-items: flex-start; gap: 12px; padding: 28px 28px 20px; flex-shrink: 0; }
+  .settings-heading { flex: 1; min-width: 0; }
+  .settings-heading h2 { margin: 0; font-size: 22px; line-height: 1.3; letter-spacing: -.4px; }
+  .settings-heading p { margin: 5px 0 0; color: var(--text-faint); font-size: 12.5px; }
+  .settings-close { flex-shrink: 0; margin-top: 1px; }
+  .settings-error { margin: 0 28px 16px; padding: 10px 12px; border-radius: 9px; background: var(--danger-soft); flex-shrink: 0; }
+  .settings-error:empty { display: none; }
+  .settings-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; align-content: start; gap: 14px; padding: 0 28px 28px; }
+  .settings-section { min-width: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
+  .settings-section-head { display: flex; align-items: flex-start; gap: 12px; padding: 20px 22px 16px; }
+  .settings-section-icon { display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 auto; border-radius: 9px; color: var(--accent); background: var(--accent-soft); }
+  .settings-section-icon .icon { width: 17px; height: 17px; }
+  .settings-section-head h3 { margin: 0; font-size: 14px; line-height: 1.5; font-weight: 650; }
+  .settings-section-head p { margin: 3px 0 0; color: var(--text-faint); font-size: 12px; line-height: 1.6; }
+  .settings-section-body { padding: 0 22px 22px; }
+  .settings-grid { display: grid; gap: 17px 18px; }
+  .settings-grid .field { margin: 0; }
+  .field.full { grid-column: 1 / -1; }
+  .notification-grid { display: grid; gap: 16px; }
+  .notification-channel { min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-2); }
+  .channel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 17px; }
+  .channel-title { display: flex; align-items: center; gap: 8px; }
+  .channel-title .icon { width: 16px; height: 16px; color: var(--text-dim); }
+  .channel-title h4 { margin: 0; font-size: 13px; font-weight: 650; }
+  .channel-head .switch { gap: 7px; }
+  .channel-head .switch label { font-size: 12px; color: var(--text-dim); }
+  .settings-footer { display: flex; align-items: center; gap: 16px; padding: 14px 28px max(14px, env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
+  .settings-status { color: var(--text-faint); font-size: 12px; }
+  .settings-status.dirty { color: var(--text-dim); }
+  #settings-save { margin-left: auto; }
+  @media (min-width: 1200px) {
+    .settings-grid.two-column, .notification-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
 
   #toast { position: fixed; left: 50%; bottom: max(28px, env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(10px); background: var(--text); color: var(--surface); padding: 11px 18px; border-radius: 11px; font-size: 13px; box-shadow: var(--shadow-lg); opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; z-index: 60; max-width: min(480px, 90vw); text-align: center; }
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
@@ -285,9 +302,11 @@
     .menu-btn { display: inline-flex; }
     .split { grid-template-columns: minmax(0, 1fr); }
     .list-pane { border-right: none; }
-    #app-view .list-pane, #app-view .detail-pane { display: none; }
+    #app-view .list-pane, #app-view .detail-pane, #app-view #settings-view { display: none; }
     #app-view:not(.showing) .list-pane { display: block; }
     #app-view.showing .detail-pane { display: flex; }
+    #app-view.settings-open .list-pane, #app-view.settings-open .detail-pane { display: none; }
+    #app-view.settings-open #settings-view { display: flex; }
     .toolbar { min-height: 64px; padding: 11px 14px; gap: 8px; }
     .toolbar-heading { display: block; }
     .toolbar .title { font-size: 16px; }
@@ -298,7 +317,9 @@
     .detail-subject { font-size: 19px; }
     .detail-top { gap: 12px; }
     .body-wrap { padding: 18px 20px 32px; }
-    .page { padding-inline: 24px; }
+    .settings-head { padding-inline: 22px; }
+    .settings-content { padding-inline: 22px; }
+    .settings-footer { padding-inline: 22px; }
   }
   @media (max-width: 600px) {
     .login-card { padding: 30px 24px; border-radius: 18px; }
@@ -321,17 +342,15 @@
     .body-toolbar { margin-inline: 4px; }
     .attachment-list { grid-template-columns: 1fr; }
     .imgbar button { margin-left: 0; }
-    .page { padding: 0 16px 48px; }
-    .page-head { min-height: 80px; padding: 14px 0; flex-wrap: wrap; }
-    .page-heading { flex: 1; }
-    .page-heading h2 { font-size: 20px; }
-    .page-heading p { display: none; }
-    .page-head .btn { min-height: 36px; padding: 7px 10px; font-size: 12px; }
-    .page-body { grid-template-columns: minmax(0, 1fr); gap: 12px; }
-    .group.span-2 { grid-column: auto; }
-    .group { padding: 18px; }
-    .fields-grid-body { grid-template-columns: minmax(0, 1fr); }
-    .settings-nav { margin-inline: -4px; }
+    .settings-head { align-items: center; padding: 20px 16px 16px; }
+    .settings-heading h2 { font-size: 20px; }
+    .settings-heading p { display: none; }
+    .settings-close .button-label { display: none; }
+    .settings-error { margin: 0 16px 14px; }
+    .settings-content { gap: 12px; padding: 0 12px 20px; }
+    .settings-section-head { padding: 17px 16px 14px; }
+    .settings-section-body { padding: 0 16px 18px; }
+    .settings-footer { gap: 12px; padding: 12px 16px max(12px, env(safe-area-inset-bottom)); }
   }
   .confirm-dialog { width: min(420px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--border); border-radius: 18px; background: var(--surface); color: var(--text); box-shadow: var(--shadow-lg); }
   .confirm-dialog::backdrop { background: rgba(10, 14, 25, .45); backdrop-filter: blur(3px); }
@@ -385,7 +404,7 @@
     </div>
 
     <p class="err" id="login-err" role="alert"></p>
-    <button class="btn primary login-submit" id="login-btn" type="submit"><span>登录</span><span data-icon="arrowRight"></span></button>
+    <button class="btn primary login-submit" id="login-btn" type="submit"><span>登录</span></button>
   </form>
 </section>
 
@@ -431,215 +450,214 @@
           <p>在左侧选择邮件，即可阅读正文与管理附件</p>
         </div>
       </div>
+      <section id="settings-view" aria-labelledby="settings-title" hidden>
+        <form class="settings-form" id="settings-form">
+          <header class="settings-head">
+            <div class="settings-heading">
+              <h2 id="settings-title" tabindex="-1">设置</h2>
+              <p>管理你的邮箱、外观与通知</p>
+            </div>
+            <button class="btn sm ghost settings-close" type="button" id="settings-back" title="返回邮件" aria-label="返回邮件"><span data-icon="close"></span><span class="button-label">返回</span></button>
+          </header>
+          <p class="err settings-error" id="settings-err" role="alert"></p>
+          <div class="settings-content">
+            <section class="settings-section">
+              <header class="settings-section-head">
+                <span class="settings-section-icon"><span data-icon="palette"></span></span>
+                <div><h3>外观</h3><p>自定义登录页和应用中的站点标识。</p></div>
+              </header>
+              <div class="settings-section-body settings-grid two-column">
+                <div class="field">
+                  <label for="site-name">站点名称</label>
+                  <input class="input" id="site-name" autocomplete="off" maxlength="40" placeholder="MailFlare">
+                </div>
+                <div class="field">
+                  <label for="site-logo">Logo 地址</label>
+                  <input class="input" id="site-logo" autocomplete="off" placeholder="https://… 或 /logo.png">
+                  <span class="hint">留空使用默认邮件图标，支持图片链接或站内路径。</span>
+                </div>
+                <div class="field full">
+                  <label for="site-background">登录页背景</label>
+                  <input class="input" id="site-background" autocomplete="off" placeholder="#0f172a 或 https://…/bg.jpg">
+                  <span class="hint">填写颜色值或图片地址，留空使用默认背景。</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="settings-section">
+              <header class="settings-section-head">
+                <span class="settings-section-icon"><span data-icon="shield"></span></span>
+                <div><h3>安全</h3><p>为登录页添加 Turnstile 人机验证。</p></div>
+              </header>
+              <div class="settings-section-body settings-grid two-column">
+                <div class="field">
+                  <label for="ts-site-key">Site Key</label>
+                  <input class="input" id="ts-site-key" autocomplete="off" placeholder="0x4AAA...">
+                </div>
+                <div class="field">
+                  <label for="ts-secret">Secret Key</label>
+                  <input class="input" id="ts-secret" type="password" autocomplete="off" placeholder="0x4AAA...">
+                  <span class="hint" id="ts-secret-hint"></span>
+                </div>
+                <div class="field full">
+                  <label for="ts-hostname">限定 Hostname（可选）</label>
+                  <input class="input" id="ts-hostname" autocomplete="off" placeholder="mail.example.com">
+                  <span class="hint">Site Key 和 Secret Key 都填写后启用；限定域名可防止密钥被复用。</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="settings-section">
+              <header class="settings-section-head">
+                <span class="settings-section-icon"><span data-icon="bell"></span></span>
+                <div><h3>消息通知</h3><p>收到新邮件时向 Telegram 或 Bark 推送通知。</p></div>
+              </header>
+              <div class="settings-section-body">
+                <div class="notification-grid">
+                  <div class="notification-channel">
+                    <div class="channel-head">
+                      <div class="channel-title"><span data-icon="send"></span><h4>Telegram</h4></div>
+                      <div class="switch"><input type="checkbox" id="tg-enabled"><label for="tg-enabled">启用</label></div>
+                    </div>
+                    <div class="field">
+                      <label for="tg-token">Bot Token</label>
+                      <input class="input" id="tg-token" type="password" autocomplete="off" placeholder="123456:ABC-DEF...">
+                      <span class="hint" id="tg-token-hint"></span>
+                    </div>
+                    <div class="field">
+                      <label for="tg-chat">Chat ID</label>
+                      <input class="input" id="tg-chat" autocomplete="off" placeholder="123456789">
+                      <span class="hint">支持私聊 ID 或群组 ID。</span>
+                    </div>
+                  </div>
+                  <div class="notification-channel">
+                    <div class="channel-head">
+                      <div class="channel-title"><span data-icon="bell"></span><h4>Bark</h4></div>
+                      <div class="switch"><input type="checkbox" id="bark-enabled"><label for="bark-enabled">启用</label></div>
+                    </div>
+                    <div class="field">
+                      <label for="bark-server">服务地址</label>
+                      <input class="input" id="bark-server" autocomplete="off" placeholder="https://api.day.app">
+                    </div>
+                    <div class="field">
+                      <label for="bark-key">Device Key</label>
+                      <input class="input" id="bark-key" type="password" autocomplete="off" placeholder="设备 Key">
+                      <span class="hint" id="bark-key-hint"></span>
+                    </div>
+                  </div>
+                </div>
+                <div class="field" style="margin-top:17px">
+                  <label for="public-url">站点地址</label>
+                  <input class="input" id="public-url" autocomplete="off" placeholder="https://mail.example.com">
+                  <span class="hint">用于推送消息中的邮件详情链接，留空则不附带链接。</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="settings-section">
+              <header class="settings-section-head">
+                <span class="settings-section-icon"><span data-icon="database"></span></span>
+                <div><h3>附件存储</h3><p>附件通过 S3 API 存入你的 R2 桶，路径前缀为 mail/att/。</p></div>
+              </header>
+              <div class="settings-section-body settings-grid two-column">
+                <div class="field">
+                  <label for="r2-account">账号 ID</label>
+                  <input class="input" id="r2-account" autocomplete="off" placeholder="32 位十六进制" spellcheck="false" autocapitalize="off">
+                </div>
+                <div class="field">
+                  <label for="r2-bucket">桶名</label>
+                  <input class="input" id="r2-bucket" autocomplete="off" placeholder="my-mail-attachments">
+                </div>
+                <div class="field">
+                  <label for="r2-access-key">Access Key ID</label>
+                  <input class="input" id="r2-access-key" type="password" autocomplete="off" placeholder="Access Key ID">
+                  <span class="hint" id="r2-access-key-hint"></span>
+                </div>
+                <div class="field">
+                  <label for="r2-secret-key">Secret Access Key</label>
+                  <input class="input" id="r2-secret-key" type="password" autocomplete="off" placeholder="Secret Access Key">
+                  <span class="hint" id="r2-secret-key-hint"></span>
+                </div>
+              </div>
+            </section>
+
+            <section class="settings-section">
+              <header class="settings-section-head">
+                <span class="settings-section-icon"><span data-icon="filter"></span></span>
+                <div><h3>收信过滤</h3><p>黑名单命中后丢弃；白名单留空表示接收所有地址。</p></div>
+              </header>
+              <div class="settings-section-body settings-grid two-column">
+                <div class="field">
+                  <label for="blocked-senders">发件人黑名单</label>
+                  <textarea class="input textarea" id="blocked-senders" rows="4" placeholder="spam@example.com&#10;@ads.example.com&#10;bad-domain.com"></textarea>
+                  <span class="hint">一行一条，支持完整地址、@域名或域名匹配。</span>
+                </div>
+                <div class="field">
+                  <label for="allowed-recipients">收件人白名单</label>
+                  <textarea class="input textarea" id="allowed-recipients" rows="4" placeholder="留空 = 接收本域任意地址"></textarea>
+                  <span class="hint">填写后只接收名单内的地址，写法同黑名单。</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="settings-section">
+              <header class="settings-section-head">
+                <span class="settings-section-icon"><span data-icon="inbox"></span></span>
+                <div><h3>收信限制</h3><p>邮件正文存 D1，附件存 R2；超出邮件上限的邮件将被拒收。</p></div>
+              </header>
+              <div class="settings-section-body settings-grid two-column">
+                <div class="field">
+                  <label for="max-message">单封邮件上限</label>
+                  <div class="inline-input"><input class="input" id="max-message" type="number" min="1" max="25" step="1"><span class="unit">MB</span></div>
+                  <span class="hint">Email Routing 硬上限为 25MB。</span>
+                </div>
+                <div class="field">
+                  <label for="max-body">正文入库上限</label>
+                  <div class="inline-input"><input class="input" id="max-body" type="number" min="4" max="900" step="4"><span class="unit">KB</span></div>
+                  <span class="hint">超出部分将被截断。</span>
+                </div>
+                <div class="field">
+                  <label for="max-attachment">单个附件上限</label>
+                  <div class="inline-input"><input class="input" id="max-attachment" type="number" min="1" max="25" step="1"><span class="unit">MB</span></div>
+                  <span class="hint">超限附件不会保存。</span>
+                </div>
+                <div class="field">
+                  <label for="r2-concurrency">附件上传并发</label>
+                  <input class="input" id="r2-concurrency" type="number" min="1" max="16" step="1">
+                </div>
+              </div>
+            </section>
+
+            <section class="settings-section">
+              <header class="settings-section-head">
+                <span class="settings-section-icon"><span data-icon="sliders"></span></span>
+                <div><h3>列表与会话</h3><p>调整邮件分页和登录状态有效期。</p></div>
+              </header>
+              <div class="settings-section-body settings-grid two-column">
+                <div class="field">
+                  <label for="page-size">每页条数</label>
+                  <input class="input" id="page-size" type="number" min="1" max="100" step="1">
+                </div>
+                <div class="field">
+                  <label for="page-size-max">每页条数上限</label>
+                  <input class="input" id="page-size-max" type="number" min="1" max="200" step="1">
+                </div>
+                <div class="field">
+                  <label for="jwt-ttl">登录有效期</label>
+                  <div class="inline-input"><input class="input" id="jwt-ttl" type="number" min="1" max="365" step="1"><span class="unit">天</span></div>
+                </div>
+              </div>
+            </section>
+          </div>
+          <footer class="settings-footer">
+            <span class="settings-status" id="settings-status">设置更改会在保存后生效</span>
+            <button class="btn primary" type="submit" id="settings-save"><span data-icon="check"></span>保存更改</button>
+          </footer>
+        </form>
+      </section>
     </div>
   </main>
 </div>
-
-<!-- ======================= 设置页 ======================= -->
-<section id="settings-view" hidden>
-  <form class="page" id="settings-form">
-    <header class="page-head">
-      <div class="page-heading">
-        <h2 id="settings-title" tabindex="-1">设置</h2>
-        <p>管理站点外观、收信规则与推送服务</p>
-      </div>
-      <div class="grow"></div>
-      <button class="btn" type="button" id="settings-back"><span data-icon="back"></span>返回</button>
-      <button class="btn primary" type="submit" id="settings-save"><span data-icon="check"></span>保存设置</button>
-    </header>
-    <p class="err" id="settings-err" role="alert"></p>
-    <nav class="settings-nav" aria-label="设置分类">
-      <a href="#settings-appearance">外观</a>
-      <a href="#settings-security">安全</a>
-      <a href="#settings-notify">推送</a>
-      <a href="#settings-storage">存储</a>
-      <a href="#settings-incoming">收信</a>
-      <a href="#settings-general">通用</a>
-    </nav>
-    <div class="page-body">
-      <div class="group span-2" id="settings-appearance">
-        <h3><span data-icon="palette"></span>外观</h3>
-        <div class="fields-grid-body appearance-fields">
-        <div class="field">
-          <label for="site-name">站点名称</label>
-          <input class="input" id="site-name" autocomplete="off" maxlength="40" placeholder="MailFlare">
-        </div>
-        <div class="field">
-          <label for="site-logo">Logo 地址</label>
-          <input class="input" id="site-logo" autocomplete="off" placeholder="https://… 或 /logo.png">
-          <span class="hint">留空使用默认 ✉。支持 https 链接、站内路径或 data:image。</span>
-        </div>
-        <div class="field">
-          <label for="site-background">登录页背景</label>
-          <input class="input" id="site-background" autocomplete="off" placeholder="#0f172a 或 https://…/bg.jpg">
-          <span class="hint">填颜色（如 <code>#0f172a</code>）或图片地址。</span>
-        </div>
-        </div>
-      </div>
-
-      <div class="group" id="settings-site">
-        <h3><span data-icon="globe"></span>站点</h3>
-        <div class="field">
-          <label for="public-url">站点地址</label>
-          <input class="input" id="public-url" autocomplete="off" placeholder="https://mail.example.com">
-          <span class="hint">推送消息里详情链接的前缀，留空则不带链接。</span>
-        </div>
-      </div>
-
-      <div class="group" id="settings-security">
-        <h3><span data-icon="shield"></span>人机验证</h3>
-        <p class="hint" style="margin:0 0 12px">两项都填才会在登录页显示验证框。</p>
-        <div class="field">
-          <label for="ts-site-key">Site Key</label>
-          <input class="input" id="ts-site-key" autocomplete="off" placeholder="0x4AAA...">
-        </div>
-        <div class="field">
-          <label for="ts-secret">Secret Key</label>
-          <input class="input" id="ts-secret" type="password" autocomplete="off" placeholder="0x4AAA...">
-          <span class="hint" id="ts-secret-hint"></span>
-        </div>
-        <div class="field">
-          <label for="ts-hostname">限定 Hostname（可选）</label>
-          <input class="input" id="ts-hostname" autocomplete="off" placeholder="mail.example.com">
-          <span class="hint">只接受该域名的 token，防止他人复用 Site Key。</span>
-        </div>
-      </div>
-
-      <div class="group" id="settings-notify">
-        <h3><span data-icon="send"></span>Telegram</h3>
-        <div class="switch" style="margin-bottom:12px">
-          <input type="checkbox" id="tg-enabled">
-          <label for="tg-enabled">启用 Telegram 推送</label>
-        </div>
-        <div class="field">
-          <label for="tg-token">Bot Token</label>
-          <input class="input" id="tg-token" type="password" autocomplete="off" placeholder="123456:ABC-DEF...">
-          <span class="hint" id="tg-token-hint"></span>
-        </div>
-        <div class="field">
-          <label for="tg-chat">Chat ID</label>
-          <input class="input" id="tg-chat" autocomplete="off" placeholder="123456789">
-          <span class="hint">私聊 ID 或群组 <code>-100…</code> ID。</span>
-        </div>
-      </div>
-
-      <div class="group" id="settings-bark">
-        <h3><span data-icon="bell"></span>Bark</h3>
-        <div class="switch" style="margin-bottom:12px">
-          <input type="checkbox" id="bark-enabled">
-          <label for="bark-enabled">启用 Bark 推送</label>
-        </div>
-        <div class="field">
-          <label for="bark-server">服务地址</label>
-          <input class="input" id="bark-server" autocomplete="off" placeholder="https://api.day.app">
-        </div>
-        <div class="field">
-          <label for="bark-key">Device Key</label>
-          <input class="input" id="bark-key" type="password" autocomplete="off" placeholder="设备 Key">
-          <span class="hint" id="bark-key-hint"></span>
-        </div>
-      </div>
-
-      <div class="group span-2" id="settings-storage">
-        <h3><span data-icon="database"></span>附件存储</h3>
-        <p class="hint" style="margin:0 0 12px">
-          附件走 S3 API，四项都填才能用，存放在桶内 <code>mail/att/</code>。
-        </p>
-        <div class="fields-grid-body">
-        <div class="field">
-          <label for="r2-account">账号 ID</label>
-          <input class="input" id="r2-account" autocomplete="off" placeholder="32 位十六进制"
-                 spellcheck="false" autocapitalize="off">
-          <span class="hint">控制台右侧栏的 Account ID。</span>
-        </div>
-        <div class="field">
-          <label for="r2-access-key">Access Key ID</label>
-          <input class="input" id="r2-access-key" type="password" autocomplete="off" placeholder="Access Key ID">
-          <span class="hint" id="r2-access-key-hint"></span>
-        </div>
-        <div class="field">
-          <label for="r2-secret-key">Secret Access Key</label>
-          <input class="input" id="r2-secret-key" type="password" autocomplete="off" placeholder="Secret Access Key">
-          <span class="hint" id="r2-secret-key-hint"></span>
-        </div>
-        <div class="field">
-          <label for="r2-bucket">桶名</label>
-          <input class="input" id="r2-bucket" autocomplete="off" placeholder="my-mail-attachments">
-          <span class="hint">R2 里已建好的桶名。</span>
-        </div>
-        </div>
-      </div>
-
-      <div class="group span-2" id="settings-incoming">
-        <h3><span data-icon="filter"></span>收信过滤</h3>
-        <div class="fields-grid-body">
-        <div class="field">
-          <label for="blocked-senders">发件人黑名单</label>
-          <textarea class="input textarea" id="blocked-senders" rows="4"
-                    placeholder="spam@example.com&#10;@ads.example.com&#10;bad-domain.com"></textarea>
-          <span class="hint">
-            一行一条，命中即静默丢弃。写法：<code>a@b.com</code> 精确、
-            <code>@b.com</code> 域名及子域、<code>b.com</code> 同 <code>@b.com</code>。
-          </span>
-        </div>
-        <div class="field">
-          <label for="allowed-recipients">收件人白名单</label>
-          <textarea class="input textarea" id="allowed-recipients" rows="4"
-                    placeholder="留空 = 接收本域任意地址"></textarea>
-          <span class="hint">
-            <strong>留空表示不限制</strong>，任意地址都收。填了只收名单内的，写法同黑名单。
-          </span>
-        </div>
-        </div>
-      </div>
-
-      <div class="group span-2" id="settings-limits">
-        <h3><span data-icon="inbox"></span>收信限制</h3>
-        <p class="group-description">正文与元数据存 D1，附件字节存 R2。</p>
-        <div class="fields-grid-body">
-          <div class="field">
-            <label for="max-message">单封邮件上限</label>
-            <div class="inline-input"><input class="input" id="max-message" type="number" min="1" max="25" step="1"><span class="unit">MB</span></div>
-            <span class="hint">超过直接拒收，Email Routing 硬上限 25MB。</span>
-          </div>
-          <div class="field">
-            <label for="max-body">正文入库上限</label>
-            <div class="inline-input"><input class="input" id="max-body" type="number" min="4" max="900" step="4"><span class="unit">KB</span></div>
-            <span class="hint">超出截断，防止撑爆 D1 行大小。</span>
-          </div>
-          <div class="field">
-            <label for="max-attachment">单个附件上限</label>
-            <div class="inline-input"><input class="input" id="max-attachment" type="number" min="1" max="25" step="1"><span class="unit">MB</span></div>
-            <span class="hint">超过则跳过转存，列表显示「附件过大，未保存」。</span>
-          </div>
-          <div class="field">
-            <label for="r2-concurrency">附件上传并发</label>
-            <input class="input" id="r2-concurrency" type="number" min="1" max="16" step="1">
-          </div>
-        </div>
-      </div>
-
-      <div class="group span-2" id="settings-general">
-        <h3><span data-icon="sliders"></span>列表与会话</h3>
-        <div class="fields-grid-body">
-          <div class="field">
-            <label for="page-size">每页条数</label>
-            <input class="input" id="page-size" type="number" min="1" max="100" step="1">
-          </div>
-          <div class="field">
-            <label for="page-size-max">每页条数上限</label>
-            <input class="input" id="page-size-max" type="number" min="1" max="200" step="1">
-          </div>
-          <div class="field">
-            <label for="jwt-ttl">登录有效期</label>
-            <div class="inline-input"><input class="input" id="jwt-ttl" type="number" min="1" max="365" step="1"><span class="unit">天</span></div>
-            <span class="hint">登录态的有效期，默认 7 天。</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  </form>
-</section>
 
 <div id="toast" role="status" aria-live="polite"></div>
 <!-- APP_SCRIPT_START -->
