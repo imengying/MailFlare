@@ -1,14 +1,7 @@
 //! 运行时配置。
 //!
-//! 分两层：
-//!
-//! 1. **环境变量（`Env`）** —— 只有三项，都是登录的根凭证，改一次要重新部署：
-//!    `ADMIN_USERNAME` / `ADMIN_PASSWORD` / `JWT_SECRET`。
-//! 2. **`configs` 表（D1）** —— 其余全部参数，存成一条 JSON，在网页「设置」里改，
-//!    即时生效，不需要重新部署。
-//!
-//! 这么分层的原因：把几十个可选参数塞进 Worker 环境变量，部署面板会变得难以
-//! 维护，改一个分页大小还要重新走一遍构建。
+//! 登录根凭证（`ADMIN_USERNAME` / `ADMIN_PASSWORD` / `JWT_SECRET`）来自
+//! 环境变量；其余参数全部存在 D1 的 `configs` 表，网页里可改。
 
 use serde::{Deserialize, Serialize};
 use worker::{D1Database, Env};
@@ -16,19 +9,13 @@ use worker::{D1Database, Env};
 use crate::error::{AppError, AppResult};
 use crate::util::now_secs;
 
-/// `configs` 表里的 key，集中管理避免拼写错误。
+/// `configs` 表里的 key。
 pub mod keys {
-    /// 单行 JSON，存放全部可配置项（见 [`Settings`]）。
     pub const SETTINGS: &str = "settings";
-    /// 登录失败计数，用于暴力破解限流。
     pub const LOGIN_GUARD: &str = "login_guard";
 }
 
-// ===========================================================================
-// 环境变量（只有三项）
-// ===========================================================================
-
-/// 从 `Env` 读取一个必需字符串（vars 或 secret 均可）。
+/// 读取必需的环境变量，缺失或为空时报错。
 fn require(env: &Env, name: &str) -> AppResult<String> {
     let value = env.var(name).map(|v| v.to_string()).unwrap_or_default();
     if value.is_empty() {
@@ -39,18 +26,13 @@ fn require(env: &Env, name: &str) -> AppResult<String> {
     Ok(value)
 }
 
-/// 来自 Worker 环境变量的最小配置。
 pub struct Config {
-    /// 管理员用户名。
     pub admin_username: String,
-    /// 管理员密码。
     pub admin_password: String,
-    /// JWT HMAC-SHA256 签名密钥。
     pub jwt_secret: String,
 }
 
 impl Config {
-    /// 从 `Env` 读取。缺失任一项都返回 `Internal` 错误。
     pub fn from_env(env: &Env) -> AppResult<Self> {
         Ok(Self {
             admin_username: require(env, "ADMIN_USERNAME")?,
@@ -72,15 +54,15 @@ impl Config {
 #[serde(default)]
 pub struct Settings {
     // ---- 站点 -----------------------------------------------------------
-    /// 对外访问地址，用于在推送消息里拼「查看详情」链接。
+    /// 推送消息里「查看详情」链接的前缀。
     pub public_url: String,
 
     // ---- Turnstile ------------------------------------------------------
-    /// Site Key（公开值，会下发给前端渲染挂件）。
+    /// 公开值，下发给前端渲染挂件。
     pub turnstile_site_key: String,
-    /// Secret Key。留空则后端跳过人机校验。
+    /// 留空则跳过人机校验。
     pub turnstile_secret: String,
-    /// 可选加固：限制 token 只能在该 hostname 上使用。
+    /// 限定 token 只能在该 hostname 上使用。
     pub turnstile_hostname: String,
 
     // ---- Telegram -------------------------------------------------------
@@ -93,36 +75,25 @@ pub struct Settings {
     pub bark_server: String,
     pub bark_device_key: String,
 
-    // ---- R2（S3 API）------------------------------------------------------
-    /// Cloudflare 账号 ID：S3 端点主机名是 `{account_id}.r2.cloudflarestorage.com`。
+    // ---- R2（S3 API）----
+    /// 端点主机名是 `{account_id}.r2.cloudflarestorage.com`。
     pub r2_account_id: String,
-    /// R2 的 Access Key ID。
     pub r2_access_key_id: String,
-    /// R2 的 Secret Access Key。
     pub r2_secret_access_key: String,
-    /// 桶名，由用户自己填。
     pub r2_bucket: String,
 
     // ---- 收信过滤 -------------------------------------------------------
-    /// 发件人黑名单。
-    ///
-    /// 每项支持两种写法：完整地址 `spam@example.com`，或域名 `@example.com`。
-    /// 命中任一项即静默丢弃（不退信，避免向垃圾邮件发送者确认地址存在）。
+    /// 发件人黑名单，命中即静默丢弃（不退信）。
     pub blocked_senders: Vec<String>,
-    /// 收件人白名单。
-    ///
-    /// **留空表示接收发往本域任意地址的邮件**（catch-all），不需要事先注册
-    /// 每个邮箱。只有填了值才启用限制，此时只收名单内的收件人。
+    /// 收件人白名单。**留空表示不限**，任意地址都收（catch-all）。
     pub allowed_recipients: Vec<String>,
 
     // ---- 收信 -----------------------------------------------------------
-    /// 正文入库上限（字节），超出部分截断。
+    /// 正文入库上限（字节），超出截断。
     pub max_body_bytes: i64,
-    /// 单封邮件总大小上限（字节），超过直接拒收。
+    /// 单封邮件上限（字节），超过拒收。
     pub max_message_bytes: i64,
-    /// 单个附件转存 R2 的上限（字节）。
     pub max_attachment_bytes: i64,
-    /// 附件写 R2 的并发度。
     pub r2_concurrency: i64,
 
     // ---- 列表 -----------------------------------------------------------
@@ -166,10 +137,7 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// 归一化 + 夹紧取值范围。
-    ///
-    /// 写库前调用，保证读出来的值总是可用的：即使有人直接改 `configs` 表塞进
-    /// 离谱的数字，也不会让 Worker 跑到 OOM。
+    /// 归一化并夹紧取值范围，写库前调用。
     pub fn normalized(mut self) -> Self {
         self.public_url = self.public_url.trim().trim_end_matches('/').to_string();
         self.turnstile_site_key = self.turnstile_site_key.trim().to_string();
@@ -210,12 +178,12 @@ impl Settings {
         self
     }
 
-    /// 是否启用 Turnstile（配了 secret 才算）。
+    /// 配了 secret 才算启用。
     pub fn turnstile_enabled(&self) -> bool {
         !self.turnstile_secret.is_empty()
     }
 
-    /// R2 是否已配置完整（四项都填了才能用 S3 API）。
+    /// 四项都填了才能用 S3 API。
     pub fn r2_configured(&self) -> bool {
         !self.r2_account_id.is_empty()
             && !self.r2_access_key_id.is_empty()
@@ -223,12 +191,12 @@ impl Settings {
             && !self.r2_bucket.is_empty()
     }
 
-    /// 推送消息里的站点地址；空串归一成 `None`。
+    /// 空串归一成 `None`。
     pub fn public_url(&self) -> Option<&str> {
         (!self.public_url.is_empty()).then_some(self.public_url.as_str())
     }
 
-    /// 对外的脱敏视图：密钥只回传「是否已设置」+ 尾部提示。
+    /// 密钥只回传「是否已设置」+ 尾部提示。
     pub fn redacted(&self) -> SettingsView<'_> {
         SettingsView {
             public_url: &self.public_url,
@@ -263,7 +231,6 @@ impl Settings {
     }
 }
 
-/// 对外的脱敏视图：不把任何密钥明文回给前端。
 #[derive(Serialize)]
 pub struct SettingsView<'a> {
     pub public_url: &'a str,
@@ -296,10 +263,7 @@ pub struct SettingsView<'a> {
     pub jwt_ttl_secs: i64,
 }
 
-/// 清洗地址列表：去空格、转小写、丢空项、去重，保持用户填写顺序。
-///
-/// 去重很重要：用户从聊天记录粘贴列表时常见重复项，而匹配是逐项遍历，
-/// 重复项会白白拉长收信路径上的耗时。
+/// 去空格、转小写、丢空项、去重。
 fn normalize_list(items: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(items.len());
     for item in items {
@@ -312,10 +276,9 @@ fn normalize_list(items: Vec<String>) -> Vec<String> {
     out
 }
 
-/// 从 `From` 头 / 信封地址里抽出纯邮箱地址（去掉显示名与尖括号）。
+/// 抽出纯邮箱地址，去掉显示名与尖括号。
 ///
-/// 信封地址通常已是裸地址，但 `From` 头常见 `"名字" <a@b.com>`，
-/// 直接比较会把「带显示名的发件人」整个漏掉。
+/// 信封地址通常是裸地址，但 `From` 头常见 `"名字" <a@b.com>`。
 pub fn bare_address(raw: &str) -> String {
     let raw = raw.trim();
     // 有尖括号时取最后一对的内容：`"a <b>" <c@d.com>` 也能取对。
@@ -327,11 +290,7 @@ pub fn bare_address(raw: &str) -> String {
     raw.to_lowercase()
 }
 
-/// 地址规则的匹配（黑白名单共用同一套写法）。
-///
-/// * `a@b.com`  → 精确匹配该地址
-/// * `@b.com`   → 匹配该域名及其子域
-/// * `b.com`    → 等价于 `@b.com`（避免用户少写 `@` 就静默失效）
+/// 地址规则匹配：`a@b.com` 精确、`@b.com` 域名及子域、`b.com` 同 `@b.com`。
 fn rule_matches(rule: &str, address: &str, domain: &str) -> bool {
     // 规则也统一小写：`normalized()` 已经转过一次，但有人可能直接改
     // D1 表塞进大写项，这里再兜一次，免得规则静默失效。
@@ -343,7 +302,6 @@ fn rule_matches(rule: &str, address: &str, domain: &str) -> bool {
     }
 }
 
-/// 判断发件人是否命中黑名单。列表为空时恒为 `false`。
 pub fn sender_blocked(blocked: &[String], sender: &str) -> bool {
     if blocked.is_empty() {
         return false;
@@ -356,10 +314,7 @@ pub fn sender_blocked(blocked: &[String], sender: &str) -> bool {
     blocked.iter().any(|rule| rule_matches(rule, &address, domain))
 }
 
-/// 判断收件人是否被允许。
-///
-/// **白名单为空时一律放行**——这是「不需要预先注册邮箱也能收件」的关键：
-/// 只有用户真的填了白名单才开始限制。
+/// **白名单为空时一律放行**，这是免注册收件的前提。
 pub fn recipient_allowed(allowed: &[String], recipient: &str) -> bool {
     if allowed.is_empty() {
         return true;
@@ -372,11 +327,7 @@ pub fn recipient_allowed(allowed: &[String], recipient: &str) -> bool {
     allowed.iter().any(|rule| rule_matches(rule, &address, domain))
 }
 
-/// 校验一条地址规则是否可用。
-///
-/// 接受三种写法（与 [`rule_matches`] 对应）：
-/// `a@b.com` / `@b.com` / `b.com`。规则里不允许出现空格与通配符，
-/// 否则用户会以为 `*@b.com` 生效、而实际匹配不到任何东西。
+/// 接受 `a@b.com` / `@b.com` / `b.com`；不允许空格与通配符。
 pub fn valid_address_rule(rule: &str) -> bool {
     let rule = rule.trim();
     if rule.is_empty() || rule.len() > 254 {
@@ -398,17 +349,15 @@ pub fn valid_address_rule(rule: &str) -> bool {
     }
 }
 
-/// 合并一个密钥字段：`None` 保持不变，`Some("")` 清空，`Some(v)` 覆盖。
+/// `None` 保持不变，`Some("")` 清空，`Some(v)` 覆盖。
 ///
-/// 含 `*` 的值一律忽略——那是脱敏视图（`****abcd`）的特征，前端若误把
-/// 提示回传，绝不能让它覆盖真密钥。
+/// 含 `*` 的值忽略，那是脱敏视图（`****abcd`）的特征。
 pub fn merge_secret(slot: &mut String, patch: Option<String>) {
     if let Some(v) = patch.filter(|v| !v.contains('*')) {
         *slot = v;
     }
 }
 
-/// 只展示密钥尾部，方便用户确认填的是哪一份。
 fn hint(secret: &str) -> &str {
     if secret.is_empty() {
         ""
@@ -427,10 +376,7 @@ fn hint(secret: &str) -> &str {
 // configs 表读写
 // ===========================================================================
 
-/// `configs` 行的反序列化目标。
-///
-/// 用结构体而非 `first::<String>(Some("value"))`：`value` 列允许 NULL，
-/// 直接反序列化成 `String` 会报错；而且行不存在时也要能区分出来。
+/// `value` 列允许 NULL，所以用 `Option` 接；行不存在时也能区分。
 #[derive(Deserialize)]
 struct ConfigRow {
     #[serde(default)]

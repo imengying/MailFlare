@@ -1,10 +1,6 @@
 //! 新邮件推送：Telegram Bot 与 Bark。
 //!
-//! 设计要点：
-//! * 推送在 `ctx.wait_until()` 里执行，不阻塞收信主流程；
-//! * 两个渠道用 `futures_util::join!` **并发**发起，总耗时取两者最大值；
-//! * 每个请求都带超时，避免某个渠道挂死拖垮 Worker 的墙钟预算；
-//! * 推送失败只写日志，绝不影响邮件是否已入库。
+//! 跑在 `wait_until()` 里，两个渠道并发、各自带超时，失败只记日志。
 
 use std::time::Duration;
 
@@ -19,10 +15,7 @@ const PUSH_TIMEOUT: Duration = Duration::from_secs(8);
 /// Telegram 单条消息上限 4096 字符，这里留出转义/链接的余量。
 const TG_TEXT_LIMIT: usize = 3500;
 
-/// 推送所需的邮件摘要。
-///
-/// 刻意不复用 `EmailDetail`：正文可能有几百 KB，而通知只需要一小段预览，
-/// 单独构造能显著降低 waitUntil 任务的内存占用。
+/// 推送摘要。不复用 `EmailDetail`：正文可能几百 KB，通知只要一小段预览。
 #[derive(Debug, Clone)]
 pub struct PushEmail {
     pub id: String,
@@ -49,15 +42,12 @@ pub enum ChannelResult {
     Failed(String),
 }
 
-/// 把错误信息里的换行压平，避免日志串行。
+/// 压平换行，避免日志串行。
 fn flatten(e: impl std::fmt::Display) -> String {
     e.to_string().replace('\n', " ")
 }
 
-/// 带超时的 `fetch`。
-///
-/// Cloudflare 的 `fetch` 没有超时参数，这里用 `AbortController` + `Delay` 竞速：
-/// 谁先完成就用谁的结果；超时分支主动 abort，释放底层连接。
+/// `fetch` 没有超时参数，用 `AbortController` + `Delay` 竞速。
 async fn fetch_with_timeout(url: Url, init: RequestInit, timeout: Duration) -> Result<u16, String> {
     let controller = worker::AbortController::default();
     // 必须把 signal 真正挂到请求上，否则 abort() 只是空操作。
@@ -96,12 +86,9 @@ async fn fetch_with_timeout(url: Url, init: RequestInit, timeout: Duration) -> R
     }
 }
 
-/// Telegram MarkdownV2 中 **链接目标（`(...)` 内部）** 的转义。
+/// 链接目标（`(...)` 内）只转义 `\` 和 `)`。
 ///
-/// 官方规则与正文不同：URL 里只需要转义 `\` 和 `)`，其余字符一律原样保留。
-/// 用正文那套「全量转义」处理 URL 会得到
-/// `https://mail\.example\.com/?id\=...` —— 反斜杠会被当成 URL 的一部分，
-/// 用户点开就是 404。这是最容易踩的坑之一。
+/// 用正文那套全量转义会得到 `https://a\.b/?id\=1`，反斜杠进入 URL，点了 404。
 fn escape_markdown_v2_url(input: &str) -> String {
     let mut out = String::with_capacity(input.len() + 4);
     for c in input.chars() {
@@ -113,9 +100,7 @@ fn escape_markdown_v2_url(input: &str) -> String {
     out
 }
 
-/// Telegram MarkdownV2 正文转义。
-///
-/// MarkdownV2 要求对一批保留字符加反斜杠，否则整条消息会被 400 拒收。
+/// 保留字符不加反斜杠会被 Telegram 以 400 拒收。
 fn escape_markdown_v2(input: &str) -> String {
     let mut out = String::with_capacity(input.len() + 16);
     for c in input.chars() {

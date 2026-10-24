@@ -1,23 +1,9 @@
-//! R2 存储层：通过 **S3 API**（`fetch` + SigV4）读写附件。
+//! R2 存储层：S3 API（`fetch` + SigV4）读写附件。
 //!
-//! 邮件正文、发件人、主题、附件元数据全部在 D1 的 `emails` 表里；
-//! R2 只承担大块的二进制（附件），这样 D1 单行不会因为附件而膨胀。
+//! 走 S3 API 而非 Worker 绑定，端点、密钥、桶名全部来自设置表，
+//! 改完即时生效，且不限制桶名。
 //!
-//! ## 为什么走 S3 API 而不是 Worker 绑定
-//! 绑定（`[[r2_buckets]]`）要求桶名写进 `wrangler.toml`，而桶是用户自己的
-//! 资源——名字、账号、用哪个桶都应该由用户在后台决定。改用 S3 API 后，
-//! 端点、密钥、桶名全部来自设置表，改完即时生效，不需要重新部署。
-//!
-//! ## key 布局
-//! ```text
-//! mail/att/{email_id}/{index}      附件（index 为 MIME 部件序号）
-//! ```
-//! 统一带 `mail/` 前缀，便于和其他用途共用同一个桶。
-//!
-//! ## 零拷贝
-//! 下载时**绝不**调用 `bytes().await`：附件可能有几十 MB，读进 WASM 线性
-//! 内存既慢又会顶到 128MB 上限。正确做法是从上游响应里取出
-//! `ResponseBody::Stream` 直接交给运行时转发，字节全程不经过 Rust 堆。
+//! key 布局：`mail/att/{email_id}/{index}`
 
 use worker::{console_error, Fetch, Headers, Method, Request, RequestInit, Response};
 

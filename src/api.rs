@@ -24,15 +24,13 @@ use crate::error::{AppError, AppResult};
 use crate::r2;
 use crate::util::{ok_json, query_i64, query_param};
 
-/// 附件下载票据有效期（秒）。
 const DL_TICKET_TTL: i64 = 600;
 
-/// 构造 API 用的上下文（每请求一次，成本很低）。
 pub struct ApiCtx<'a> {
     pub env: &'a Env,
-    /// 来自环境变量的最小凭证配置。
+    /// 环境变量里的登录凭证。
     pub cfg: &'a Config,
-    /// 来自 D1 的后台设置（Turnstile、推送、限额等）。
+    /// D1 里的后台设置。
     pub settings: &'a Settings,
 }
 
@@ -42,18 +40,13 @@ impl<'a> ApiCtx<'a> {
     }
 }
 
-/// API 总入口：由 `lib.rs` 在 `/api` 前缀命中后调用。
-///
-/// 前端与 API 同源部署（同一个 Worker 的 `[assets]` + `/api/*`），
-/// 因此不需要任何 CORS 头，也不接受跨域调用。
+/// 前端与 API 同源部署，不需要 CORS。
 pub async fn dispatch(mut req: Request, env: Env, path: &str) -> Response {
-    // 所有接口都依赖环境变量里的根凭证；缺了就在这里统一报错。
     let cfg = match Config::from_env(&env) {
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
-    // D1 拿不到时退化成默认设置：登录仍然要能进行，
-    // 否则用户会因为「没配 D1 绑定」而彻底进不了后台看错误提示。
+    // 读不到设置时用默认值，保证「没配 D1」也能登录进来看错误。
     let settings = match env.d1("DB") {
         Ok(db) => config::load_settings(&db).await.unwrap_or_else(|e| {
             console_error!("[mailflare] 读取设置失败，使用默认值: {e:?}");
@@ -515,17 +508,11 @@ async fn delete_email(ctx: &ApiCtx<'_>, id: &str) -> AppResult<Response> {
 // 附件下载 / 原始邮件下载
 // ===========================================================================
 
-/// 流式读取 R2 附件（经 S3 API）。
+/// 流式读取 R2 附件（S3 API）。
 ///
-/// ## 零拷贝
-/// 全程**不调用** `bytes().await`：附件可能有几十 MB，读进 WASM 线性内存
-/// 既慢又会顶到 128MB 上限。做法是从上游响应里取出 `ResponseBody::Stream`，
-/// 直接交给运行时转发，字节不经过 Rust 堆。
-///
-/// ## 为什么要重建响应而不是改上游 headers
-/// `Fetch::send()` 返回的响应在 Workers 运行时里 **headers 是不可变的**，
-/// 直接 `headers_mut().set()` 会抛 `TypeError: Can't modify immutable headers`。
-/// 所以用 `into_parts()` 把 body 取出来，配一个全新的 `ResponseBuilder` 重建。
+/// 零拷贝：不调用 `bytes().await`，直接用 `ResponseBody::Stream` 转发。
+/// 上游响应的 headers 在运行时里不可变，所以必须 `into_parts()` 取出 body
+/// 后重建响应。
 async fn get_attachment(req: &Request, ctx: &ApiCtx<'_>, object_id: &str) -> AppResult<Response> {
     let (email_id, index) = r2::parse_attachment_id(object_id)?;
 

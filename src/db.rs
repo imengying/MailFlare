@@ -1,11 +1,8 @@
-//! D1 数据访问层。
+//! D1 数据访问层，SQL 集中在这里。
 //!
-//! 只暴露与业务语义对齐的函数，SQL 全部集中在这里，方便审查与优化。
-//!
-//! ## 关于时间戳
-//! `created_at` 存**毫秒** Unix 时间戳。workers-rs 的 `D1Type::Integer` 只有 i32，
-//! 毫秒时间戳会溢出，因此统一用 `D1Type::Real(f64)` 绑定（整数在 2^53 内可被 f64
-//! 精确表示），写入时再 `CAST(? AS INTEGER)`，保证列里落的是整数而不是浮点。
+//! `created_at` 是毫秒时间戳，但 `D1Type::Integer` 只有 i32，会溢出。
+//! 所以统一用 `D1Type::Real(f64)` 绑定（2^53 内可精确表示），
+//! 写入时 `CAST(? AS INTEGER)`，列里落的仍是整数。
 
 use serde::{Deserialize, Serialize};
 use worker::{D1Database, D1Type};
@@ -15,7 +12,7 @@ use crate::error::AppResult;
 /// 附件元数据，整体以 JSON 数组存在 `emails.attachments`。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachmentMeta {
-    /// MIME 部件在该邮件中的序号，同时作为附件下载 ID 的一部分。
+    /// MIME 部件序号，同时构成下载 ID。
     pub index: usize,
     pub filename: String,
     pub content_type: String,

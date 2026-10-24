@@ -1,20 +1,7 @@
-//! MailFlare —— 极简单用户邮件管理系统。
+//! MailFlare —— 单用户邮件管理系统。
 //!
-//! 单个 Worker 同时承担两个角色：
-//! 1. `fetch` 事件：`/api/*` 走 Rust 后端，其余请求回落到 `[assets]` 绑定的静态资源
-//!    （单页前端）；未配置 assets 时返回内嵌的极简页面。
-//! 2. `email` 事件：接收 Cloudflare Email Routing 投递的邮件。
-//!
-//! 模块划分：
-//! * `api`      —— HTTP 路由与各个 handler
-//! * `auth`     —— Turnstile 校验、JWT 签发/校验
-//! * `config`   —— 环境变量与 `configs` 表
-//! * `db`       —— D1 数据访问
-//! * `inbound`  —— 收信流水线
-//! * `mail`     —— mail-parser 解析
-//! * `notify`   —— Telegram / Bark 推送
-//! * `r2`       —— R2 对象读写
-//! * `util`     —— 时间、ID、截断等小工具
+//! 一个 Worker 两个事件：`fetch` 处理 `/api/*` 并回落到静态资源，
+//! `email` 接收 Email Routing 投递的邮件。
 
 mod api;
 mod auth;

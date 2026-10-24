@@ -119,7 +119,6 @@
     background: linear-gradient(140deg, var(--accent), #8b5cf6); color: #fff; font-size: 15px;
   }
   .login-card .brand { margin-bottom: 6px; }
-  .login-sub { color: var(--text-dim); font-size: 13px; margin: 0 0 22px; }
   .err { color: var(--danger); font-size: 13px; min-height: 18px; margin: 4px 0 10px; }
 
   /* ---------- 应用布局 ---------- */
@@ -141,7 +140,6 @@
     padding: 1px 7px; border-radius: 99px; min-width: 20px; text-align: center;
   }
   aside .spacer { flex: 1; }
-  .storage-note { font-size: 11.5px; color: var(--text-faint); padding: 0 10px 8px; line-height: 1.5; }
 
   main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
   .toolbar {
@@ -290,7 +288,6 @@
 <section id="login-view">
   <form class="login-card" id="login-form" autocomplete="on">
     <div class="brand"><span class="logo">✉</span> MailFlare</div>
-    <p class="login-sub">使用管理员账号登录</p>
 
     <div class="field">
       <label for="username">用户名</label>
@@ -307,12 +304,11 @@
 
     <label class="switch" style="margin-bottom:14px">
       <input type="checkbox" id="remember-me">
-      <span>记住我（12 小时 / 7 天）</span>
+      <span>记住我</span>
     </label>
 
     <div class="field" id="turnstile-field" hidden>
       <label>人机验证</label>
-      <!-- Turnstile 会把挂件渲染到这个容器里 -->
       <div id="turnstile-container"></div>
     </div>
 
@@ -333,7 +329,6 @@
     </button>
     <button class="nav-item" id="open-settings"><span>⚙️</span> 设置</button>
     <div class="spacer"></div>
-    <p class="storage-note">邮件正文截断入库，原始 .eml 与附件存放在 R2。</p>
     <button class="nav-item" id="logout"><span>↩</span> 退出登录</button>
   </aside>
 
@@ -367,15 +362,13 @@
       <div class="field">
         <label for="public-url">站点地址</label>
         <input class="input" id="public-url" autocomplete="off" placeholder="https://mail.example.com">
-        <span class="hint">用于在推送消息里拼「查看详情」链接。留空则不带链接。</span>
+        <span class="hint">推送消息里详情链接的前缀，留空则不带链接。</span>
       </div>
     </div>
 
     <div class="group">
       <h3>人机验证（Turnstile）</h3>
-      <p class="hint" style="margin:0 0 12px">
-        两项都填才会在登录页显示验证框。留空表示不启用，登录只剩密码一道防线。
-      </p>
+      <p class="hint" style="margin:0 0 12px">两项都填才会在登录页显示验证框。</p>
       <div class="field">
         <label for="ts-site-key">Site Key</label>
         <input class="input" id="ts-site-key" autocomplete="off" placeholder="0x4AAA...">
@@ -388,7 +381,7 @@
       <div class="field">
         <label for="ts-hostname">限定 Hostname（可选）</label>
         <input class="input" id="ts-hostname" autocomplete="off" placeholder="mail.example.com">
-        <span class="hint">填了之后只接受该域名的 token，可防止他人复用你的 Site Key。</span>
+        <span class="hint">只接受该域名的 token，防止他人复用 Site Key。</span>
       </div>
     </div>
 
@@ -407,7 +400,7 @@
       <div class="field">
         <label for="tg-chat">Chat ID</label>
         <input class="input" id="tg-chat" autocomplete="off" placeholder="123456789">
-        <span class="hint">私聊 ID，或群组/频道的 <code>-100…</code> ID。</span>
+        <span class="hint">私聊 ID 或群组 <code>-100…</code> ID。</span>
       </div>
     </div>
 
@@ -431,15 +424,14 @@
     <div class="group">
       <h3>R2 存储（附件）</h3>
       <p class="hint" style="margin:0 0 12px">
-        附件通过 R2 的 S3 API 存取，四项都填才能用。桶名由你自己决定，
-        附件统一放在桶内的 <code>mail/att/</code> 目录下。
+        附件走 S3 API，四项都填才能用，存放在桶内 <code>mail/att/</code>。
       </p>
       <div class="field">
         <label for="r2-account">账号 ID</label>
         <input class="input" id="r2-account" autocomplete="off"
                placeholder="32 位十六进制，如 a1b2c3d4e5f6..."
                spellcheck="false" autocapitalize="off">
-        <span class="hint">Cloudflare 控制台右侧栏的 Account ID。</span>
+        <span class="hint">控制台右侧栏的 Account ID。</span>
       </div>
       <div class="field">
         <label for="r2-access-key">Access Key ID</label>
@@ -456,7 +448,7 @@
       <div class="field">
         <label for="r2-bucket">桶名</label>
         <input class="input" id="r2-bucket" autocomplete="off" placeholder="my-mail-attachments">
-        <span class="hint">填你在 R2 里建好的桶名，不需要在这里改 wrangler 配置。</span>
+        <span class="hint">R2 里已建好的桶名。</span>
       </div>
     </div>
 
@@ -467,9 +459,8 @@
         <textarea class="input textarea" id="blocked-senders" rows="4"
                   placeholder="spam@example.com&#10;@ads.example.com&#10;bad-domain.com"></textarea>
         <span class="hint">
-          一行一条，命中即静默丢弃（不回退信，避免向对方确认地址存在）。
-          支持三种写法：<code>a@b.com</code> 精确匹配、<code>@b.com</code>
-          匹配该域名及子域、<code>b.com</code> 等价于 <code>@b.com</code>。
+          一行一条，命中即静默丢弃。写法：<code>a@b.com</code> 精确、
+          <code>@b.com</code> 域名及子域、<code>b.com</code> 同 <code>@b.com</code>。
         </span>
       </div>
       <div class="field">
@@ -477,25 +468,21 @@
         <textarea class="input textarea" id="allowed-recipients" rows="4"
                   placeholder="留空 = 接收本域任意地址"></textarea>
         <span class="hint">
-          <strong>留空表示不限制</strong>，发往本域任意地址的邮件都会收下，
-          不需要预先注册每个邮箱。填了之后只收名单内的收件人。
-          写法与黑名单一致。
+          <strong>留空表示不限制</strong>，任意地址都收。填了只收名单内的，写法同黑名单。
         </span>
       </div>
     </div>
 
     <div class="group">
       <h3>收信</h3>
-      <p class="hint" style="margin:0 0 12px">
-        邮件正文与元数据都保存在 D1，只有附件字节写入 R2。
-      </p>
+      <p class="hint" style="margin:0 0 12px">正文与元数据存 D1，附件字节存 R2。</p>
       <div class="field">
         <label for="max-message">单封邮件上限</label>
         <div class="inline-input">
           <input class="input" id="max-message" type="number" min="1" max="25" step="1">
           <span class="unit">MB</span>
         </div>
-        <span class="hint">超过直接拒收（Email Routing 硬上限 25MB）。</span>
+        <span class="hint">超过直接拒收，Email Routing 硬上限 25MB。</span>
       </div>
       <div class="field">
         <label for="max-body">正文入库上限</label>
@@ -503,7 +490,7 @@
           <input class="input" id="max-body" type="number" min="4" max="900" step="4">
           <span class="unit">KB</span>
         </div>
-        <span class="hint">超出部分截断，防止撑爆 D1 行大小。</span>
+        <span class="hint">超出截断，防止撑爆 D1 行大小。</span>
       </div>
       <div class="field">
         <label for="max-attachment">单个附件上限</label>
@@ -511,7 +498,7 @@
           <input class="input" id="max-attachment" type="number" min="1" max="25" step="1">
           <span class="unit">MB</span>
         </div>
-        <span class="hint">超过则跳过转存，列表里显示「附件过大，未保存」。</span>
+        <span class="hint">超过则跳过转存，列表显示「附件过大，未保存」。</span>
       </div>
       <div class="field">
         <label for="r2-concurrency">附件上传并发</label>
@@ -535,7 +522,7 @@
           <input class="input" id="jwt-ttl" type="number" min="1" max="365" step="1">
           <span class="unit">天</span>
         </div>
-        <span class="hint">勾选「记住我」时生效；不勾选最多 12 小时。</span>
+        <span class="hint">仅勾选「记住我」时生效。</span>
       </div>
     </div>
 

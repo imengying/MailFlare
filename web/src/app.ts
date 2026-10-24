@@ -1,9 +1,8 @@
 /**
- * 应用主入口：把 state / api / 各视图接起来。
+ * 应用主入口。
  *
- * 事件流是单向的：
- *   DOM 事件 → 修改 state → 调用对应 render → （必要时）请求后端
- * 没有框架、没有虚拟 DOM，每个 render 函数都是「用当前 state 重建 DOM」。
+ * 单向数据流：DOM 事件 → 改 state → render。无框架，
+ * 每个 render 函数都用当前 state 重建 DOM。
  */
 
 import type { AuthConfig, EmailDetail, EmailList, LoginResult, SessionResult } from "./api-types.ts";

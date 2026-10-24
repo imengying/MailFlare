@@ -1,19 +1,13 @@
 //! 收信处理：Email Routing -> mail-parser -> R2 附件 -> D1 -> 异步推送。
 //!
-//! ## 内存与性能
-//! * 原始报文只读一次：`ForwardableEmailMessage::raw_bytes()` 把流收成 `Vec<u8>`，
-//!   mail-parser 的 `Message<'x>` 直接借用这块缓冲区（零拷贝）。
-//! * 只有需要落库/写 R2 的字段才 `to_owned()`。附件写 R2 时 `Vec<u8>` 直接交给
-//!   `Bucket::put`，避免再拷一份。
-//! * 发件人黑名单 / 收件人白名单都在读取报文**之前**判断，只比对信封地址；
-//! * 超过「单封邮件上限」的邮件在读取前就 `set_reject`，不让它进入 WASM 堆；
-//!   单个附件超限时跳过转存，只在 D1 留下 `stored=false` 的元数据。
-//! * 附件写 R2 用 `buffer_unordered` 控制并发度；推送整体挂到 `waitUntil`。
+//! 内存要点：
+//! * 原始报文只读一次，`Message<'_>` 直接借用缓冲区（零拷贝）；
+//! * 附件字节 move 进请求体，不额外拷贝；
+//! * 黑白名单在读取报文**之前**判断，只比对信封地址；
+//! * 超过单封上限的邮件在读取前 `set_reject`，不进入 WASM 堆；
+//! * 附件并发写 R2 用 `buffer_unordered`，推送挂 `waitUntil`。
 //!
-//! ## 存储划分
-//! D1 里保存完整的邮件（发件人、收件人、主题、纯文本正文、HTML 正文、
-//! 附件元数据），R2 只存**附件字节**。原始 `.eml` 不再单独保存——
-//! 正文已经入库，再存一份原文只会白占空间。
+//! D1 存完整邮件（含正文与附件元数据），R2 只存附件字节。
 
 use worker::{console_error, console_log, Context, D1Database, Env, ForwardableEmailMessage};
 
