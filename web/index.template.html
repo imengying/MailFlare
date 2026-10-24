@@ -316,11 +316,6 @@
              autocomplete="current-password" required placeholder="••••••••">
     </div>
 
-    <label class="switch" style="margin-bottom:14px">
-      <input type="checkbox" id="remember-me">
-      <span>记住我</span>
-    </label>
-
     <div class="field" id="turnstile-field" hidden>
       <label>人机验证</label>
       <div id="turnstile-container"></div>
@@ -559,7 +554,7 @@
             <input class="input" id="jwt-ttl" type="number" min="1" max="365" step="1">
             <span class="unit">天</span>
           </div>
-          <span class="hint">仅勾选「记住我」时生效。</span>
+          <span class="hint">登录态的有效期，默认 7 天。</span>
         </div>
       </div>
     </div>

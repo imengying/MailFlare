@@ -237,7 +237,6 @@ async function handleLogin(event: Event): Promise<void> {
         username,
         password,
         turnstile_token: turnstile.getToken(),
-        remember: el<HTMLInputElement>("#remember-me").checked,
       },
     });
     api.setToken(result.token);
@@ -247,6 +246,9 @@ async function handleLogin(event: Event): Promise<void> {
     await enterApp();
   } catch (error) {
     errBox.textContent = errorMessage(error);
+    // token 是一次性的，失败后必须重新验证，所以把挂件放回来再重置
+    // （先显示再 reset：display:none 时挂件算不出尺寸）。
+    if (turnstile.ready) el<HTMLElement>("#turnstile-field").hidden = false;
     turnstile.reset();
   } finally {
     button.disabled = false;
@@ -274,6 +276,10 @@ async function initLoginPage(): Promise<void> {
       prefersDark() ? "dark" : "light",
       () => {
         toast("人机验证加载失败，请检查网络");
+      },
+      // 验证通过就收起挂件：token 已经在手上，没必要继续占地方。
+      () => {
+        el<HTMLElement>("#turnstile-field").hidden = true;
       },
     );
   } catch {

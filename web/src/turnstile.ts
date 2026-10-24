@@ -56,6 +56,8 @@ export async function mountTurnstile(
   container: string | HTMLElement,
   theme: "light" | "dark",
   onLoadError: () => void,
+  /** 验证通过回调：{@link onToken} 拿到 token 后可以收起挂件。 */
+  onVerified?: (token: string) => void,
 ): Promise<TurnstileWidget> {
   await loadScript();
   const api = window.turnstile;
@@ -70,6 +72,7 @@ export async function mountTurnstile(
     theme,
     callback: (value: string) => {
       token = value;
+      onVerified?.(value);
     },
     "expired-callback": () => {
       token = "";

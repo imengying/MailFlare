@@ -193,9 +193,6 @@ struct LoginRequest {
     /// Turnstile token；后台未配 secret 时可为空。
     #[serde(default)]
     turnstile_token: String,
-    /// 「记住我」：选中时用完整有效期，否则只发 12 小时的短 token。
-    #[serde(default)]
-    remember: bool,
 }
 
 #[derive(Serialize)]
@@ -267,12 +264,8 @@ async fn login(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response> {
     guard = config::LoginGuard::default();
     guard.save(&db).await?;
 
-    // 未勾选「记住我」时只发 12 小时，降低公共电脑上的暴露面。
-    let ttl = if body.remember {
-        ctx.settings.jwt_ttl_secs
-    } else {
-        ctx.settings.jwt_ttl_secs.min(12 * 3600)
-    };
+    // 始终使用设置里的完整有效期（默认 7 天）。
+    let ttl = ctx.settings.jwt_ttl_secs;
     let token = auth::issue_token(ctx.cfg, auth::SCOPE_API, &ctx.cfg.admin_username, ttl)?;
     Ok(ok_json(&LoginResponse {
         token,
