@@ -1121,3 +1121,81 @@ mod address_filter {
         assert!(sender_blocked(&blocked, "Spam@Example.Com"));
     }
 }
+
+mod site_appearance {
+    //! 站点外观的校验与 CSS 生成。
+    //!
+    //! 这些值会直接写进内联 `style` 与 `<img src>`，所以必须挡住伪协议。
+
+    use crate::api::{public_background, safe_image_source};
+
+    #[test]
+    fn accepts_https_and_relative_paths() {
+        assert!(safe_image_source("https://cdn.example.com/logo.png"));
+        assert!(safe_image_source("/static/logo.png"));
+        assert!(safe_image_source("data:image/png;base64,AAAA"));
+    }
+
+    #[test]
+    fn rejects_dangerous_sources() {
+        // 伪协议与混合内容
+        assert!(!safe_image_source("javascript:alert(1)"));
+        assert!(!safe_image_source("JavaScript:alert(1)"));
+        assert!(!safe_image_source("http://example.com/a.png"));
+        assert!(!safe_image_source("vbscript:msgbox"));
+        // 协议相对 URL 会指向外部
+        assert!(!safe_image_source("//evil.com/a.png"));
+        // 空值与超长值
+        assert!(!safe_image_source(""));
+        assert!(!safe_image_source(&"a".repeat(3000)));
+    }
+
+    #[test]
+    fn control_characters_are_rejected() {
+        // 用换行/制表绕过前缀检查的常见手法
+        assert!(!safe_image_source("java\nscript:alert(1)"));
+        assert!(!safe_image_source("https://a.com/\u{0}.png"));
+    }
+
+    #[test]
+    fn color_values_pass_through() {
+        assert_eq!(public_background("#1a1a1a"), "#1a1a1a");
+        assert_eq!(public_background("rgb(20, 30, 40)"), "rgb(20, 30, 40)");
+        assert_eq!(public_background("white"), "white");
+        assert_eq!(public_background(""), "");
+    }
+
+    #[test]
+    fn css_injection_in_color_is_dropped() {
+        // 试图闭合声明并注入新规则
+        assert_eq!(public_background("red; background-image: url(evil)"), "");
+        assert_eq!(public_background("red} body{display:none"), "");
+    }
+
+    #[test]
+    fn image_sources_become_url() {
+        assert_eq!(
+            public_background("https://cdn.example.com/bg.jpg"),
+            "url(\"https://cdn.example.com/bg.jpg\")"
+        );
+        assert_eq!(
+            public_background("/static/bg.jpg"),
+            "url(\"/static/bg.jpg\")"
+        );
+    }
+
+    #[test]
+    fn quotes_in_url_are_escaped() {
+        // 地址里带引号时不能提前闭合 url()
+        let out = public_background("https://a.com/x\".png");
+        assert!(out.starts_with("url(\""), "实际: {out}");
+        assert!(out.contains("\\\""), "引号应被转义: {out}");
+        assert!(out.ends_with("\")"), "实际: {out}");
+    }
+
+    #[test]
+    fn dangerous_scheme_never_reaches_css() {
+        assert_eq!(public_background("javascript:alert(1)"), "");
+        assert_eq!(public_background("http://a.com/bg.png"), "");
+    }
+}

@@ -11,6 +11,7 @@ import { renderDetail, renderDetailBody, renderDetailError, renderDetailLoading 
 import { el, isMobile, prefersDark } from "./dom.ts";
 import { renderList } from "./list-view.ts";
 import { createSettingsController } from "./settings-view.ts";
+import { applyLoginBackground, applySiteIdentity } from "./site-theme.ts";
 import { createState } from "./state.ts";
 import { mountTurnstile, noopWidget, type TurnstileWidget } from "./turnstile.ts";
 import { toast } from "./ui.ts";
@@ -30,7 +31,7 @@ function showLogin(): void {
   stopPolling();
   el<HTMLElement>("#app-view").hidden = true;
   el<HTMLElement>("#login-view").hidden = false;
-  el<HTMLElement>("#settings-mask").hidden = true;
+  el<HTMLElement>("#settings-view").hidden = true;
   state.detail = null;
   state.selectedId = null;
   state.items = [];
@@ -38,6 +39,7 @@ function showLogin(): void {
 
 async function enterApp(): Promise<void> {
   el<HTMLElement>("#login-view").hidden = true;
+  el<HTMLElement>("#settings-view").hidden = true;
   el<HTMLElement>("#app-view").hidden = false;
   try {
     await loadList({ reset: true });
@@ -45,6 +47,7 @@ async function enterApp(): Promise<void> {
     toast(errorMessage(error));
   }
   startPolling();
+  void refreshAppearance();
 }
 
 // ===========================================================================
@@ -251,10 +254,17 @@ async function handleLogin(event: Event): Promise<void> {
   }
 }
 
-/** 读取 Turnstile 公开配置并按需初始化挂件。 */
-async function initTurnstile(): Promise<void> {
+/**
+ * 读取登录前的公开配置：应用站点外观 + 按需初始化 Turnstile。
+ *
+ * 站点外观必须在登录前生效，所以和 Turnstile 共用这个不需要鉴权的接口。
+ */
+async function initLoginPage(): Promise<void> {
   try {
     const config = await api.request<AuthConfig>("/api/auth/config");
+    applySiteIdentity(config);
+    applyLoginBackground(config.site_background);
+
     if (!config.turnstile_required || !config.turnstile_site_key) return;
 
     el<HTMLElement>("#turnstile-field").hidden = false;
@@ -267,7 +277,20 @@ async function initTurnstile(): Promise<void> {
       },
     );
   } catch {
-    // 拿不到配置就保持隐藏；登录接口会返回明确错误。
+    // 拿不到配置就用默认外观，隐藏验证框；登录接口会给出明确错误。
+  }
+}
+
+/** 重新拉取设置并应用外观（保存后或登录后调用）。 */
+async function refreshAppearance(): Promise<void> {
+  try {
+    const loaded = await api.request<{ site_name: string; site_logo: string; site_background: string }>(
+      "/api/settings",
+    );
+    applySiteIdentity(loaded);
+    applyLoginBackground(loaded.site_background);
+  } catch {
+    // 外观刷新失败不影响主流程。
   }
 }
 
@@ -343,7 +366,11 @@ async function copyText(text: string): Promise<void> {
 // 事件绑定
 // ===========================================================================
 
-const settings = createSettingsController(api);
+const settings = createSettingsController(api, (loaded) => {
+  // 打开设置页时立刻按服务端值渲染一次，便于确认当前外观。
+  applySiteIdentity(loaded);
+});
+
 
 function bindEvents(): void {
   el<HTMLFormElement>("#login-form").addEventListener("submit", (event) => {
@@ -355,19 +382,18 @@ function bindEvents(): void {
     void settings.save();
   });
 
-  el<HTMLElement>("#settings-cancel").addEventListener("click", () => settings.close());
-
-  el<HTMLElement>("#settings-mask").addEventListener("click", (event) => {
-    if (event.target === el<HTMLElement>("#settings-mask")) settings.close();
+  el<HTMLElement>("#settings-back").addEventListener("click", () => {
+    el<HTMLElement>("#settings-view").hidden = true;
   });
 
-  // 保存成功由 settings 模块派发事件，避免它直接依赖 toast。
-  el<HTMLElement>("#settings-mask").addEventListener("settings-saved", () => {
+  // 保存成功后重新应用外观，站点名与背景立刻生效。
+  el<HTMLElement>("#settings-view").addEventListener("settings-saved", () => {
     toast("设置已保存");
+    void refreshAppearance();
   });
 
   el<HTMLElement>("#open-settings").addEventListener("click", () => {
-    void settings.open();
+    void settings.open().catch((error: unknown) => toast(errorMessage(error)));
   });
 
   el<HTMLElement>("#logout").addEventListener("click", () => {
@@ -445,8 +471,8 @@ function bindEvents(): void {
       el<HTMLInputElement>("#search").focus();
     }
     if (event.key === "Escape") {
-      if (!el<HTMLElement>("#settings-mask").hidden) {
-        settings.close();
+      if (settings.isOpen()) {
+        el<HTMLElement>("#settings-view").hidden = true;
         return;
       }
       el<HTMLElement>("#app-view").classList.remove("showing");
@@ -480,7 +506,7 @@ async function boot(): Promise<void> {
   }
 
   showLogin();
-  await initTurnstile();
+  await initLoginPage();
 }
 
 void boot();

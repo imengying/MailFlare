@@ -118,7 +118,16 @@
     width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
     background: linear-gradient(140deg, var(--accent), #8b5cf6); color: #fff; font-size: 15px;
   }
-  .login-card .brand { margin-bottom: 6px; }
+  /* 登录页品牌居中：侧栏那份保持左对齐。 */
+  .login-brand {
+    flex-direction: column; justify-content: center; text-align: center;
+    gap: 12px; margin-bottom: 24px;
+  }
+  .login-brand .logo { width: 46px; height: 46px; border-radius: 14px; font-size: 22px; }
+  .login-brand .brand-name { font-size: 22px; }
+  /* 自定义 logo：是图片时去掉渐变底，让它自己显示 */
+  .logo.custom { background: none; overflow: hidden; }
+  .logo.custom img { width: 100%; height: 100%; object-fit: contain; display: block; }
   .err { color: var(--danger); font-size: 13px; min-height: 18px; margin: 4px 0 10px; }
 
   /* ---------- 应用布局 ---------- */
@@ -233,21 +242,23 @@
   }
   .imgbar button { margin-left: auto; }
 
-  /* ---------- 设置抽屉 ---------- */
-  .drawer-mask {
-    position: fixed; inset: 0; background: rgba(8,10,14,.42); backdrop-filter: blur(2px);
-    display: grid; place-items: center; padding: 24px; z-index: 30;
+  /* ---------- 设置页 ---------- */
+  #settings-view {
+    min-height: 100dvh; background: var(--bg); overflow: auto;
   }
-  .drawer {
-    width: min(560px, 100%); max-height: min(760px, 90dvh); overflow: auto;
-    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
-    padding: 22px; box-shadow: var(--shadow);
+  .page {
+    width: min(760px, 100%); margin: 0 auto; padding: 20px 24px 64px;
   }
-  .drawer h2 { margin: 0 0 4px; font-size: 17px; }
-  .drawer .sub { color: var(--text-dim); font-size: 12.5px; margin: 0 0 18px; }
+  /* 顶部操作条吸顶，长表单滚到哪儿都能保存 */
+  .page-head {
+    position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px;
+    padding: 16px 0 14px; margin-bottom: 4px;
+    background: var(--bg); border-bottom: 1px solid var(--border);
+  }
+  .page-head h2 { margin: 0; font-size: 18px; }
+  .page-body { padding-top: 18px; }
   .group { border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
   .group h3 { margin: 0 0 12px; font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
-  .row-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
 
   /* ---------- Toast ---------- */
   #toast {
@@ -287,7 +298,10 @@
 <!-- ======================= 登录 ======================= -->
 <section id="login-view">
   <form class="login-card" id="login-form" autocomplete="on">
-    <div class="brand"><span class="logo">✉</span> MailFlare</div>
+    <div class="brand login-brand" id="login-brand">
+      <span class="logo" id="login-logo">✉</span>
+      <span class="brand-name" id="login-name">MailFlare</span>
+    </div>
 
     <div class="field">
       <label for="username">用户名</label>
@@ -320,7 +334,10 @@
 <!-- ======================= 主界面 ======================= -->
 <div id="app-view" hidden>
   <aside id="sidebar">
-    <div class="brand"><span class="logo">✉</span> MailFlare</div>
+    <div class="brand" id="sidebar-brand">
+      <span class="logo" id="sidebar-logo">✉</span>
+      <span class="brand-name" id="sidebar-name">MailFlare</span>
+    </div>
     <button class="nav-item active" data-filter="all">
       <span>📥</span> 全部邮件 <span class="count" id="count-unread" hidden></span>
     </button>
@@ -351,188 +368,203 @@
   </main>
 </div>
 
-<!-- ======================= 设置抽屉 ======================= -->
-<div class="drawer-mask" id="settings-mask" hidden>
-  <form class="drawer" id="settings-form">
-    <h2>设置</h2>
-    <p class="sub">保存后立即生效，无需重新部署。</p>
-
-    <div class="group">
-      <h3>站点</h3>
-      <div class="field">
-        <label for="public-url">站点地址</label>
-        <input class="input" id="public-url" autocomplete="off" placeholder="https://mail.example.com">
-        <span class="hint">推送消息里详情链接的前缀，留空则不带链接。</span>
-      </div>
-    </div>
-
-    <div class="group">
-      <h3>人机验证（Turnstile）</h3>
-      <p class="hint" style="margin:0 0 12px">两项都填才会在登录页显示验证框。</p>
-      <div class="field">
-        <label for="ts-site-key">Site Key</label>
-        <input class="input" id="ts-site-key" autocomplete="off" placeholder="0x4AAA...">
-      </div>
-      <div class="field">
-        <label for="ts-secret">Secret Key</label>
-        <input class="input" id="ts-secret" type="password" autocomplete="off" placeholder="0x4AAA...">
-        <span class="hint" id="ts-secret-hint"></span>
-      </div>
-      <div class="field">
-        <label for="ts-hostname">限定 Hostname（可选）</label>
-        <input class="input" id="ts-hostname" autocomplete="off" placeholder="mail.example.com">
-        <span class="hint">只接受该域名的 token，防止他人复用 Site Key。</span>
-      </div>
-    </div>
-
-    <div class="group">
-      <h3>Telegram 推送</h3>
-      <div class="switch" style="margin-bottom:12px">
-        <input type="checkbox" id="tg-enabled">
-        <label for="tg-enabled">启用 Telegram 推送</label>
-      </div>
-      <div class="field">
-        <label for="tg-token">Bot Token</label>
-        <input class="input" id="tg-token" type="password" autocomplete="off"
-               placeholder="123456:ABC-DEF...">
-        <span class="hint" id="tg-token-hint"></span>
-      </div>
-      <div class="field">
-        <label for="tg-chat">Chat ID</label>
-        <input class="input" id="tg-chat" autocomplete="off" placeholder="123456789">
-        <span class="hint">私聊 ID 或群组 <code>-100…</code> ID。</span>
-      </div>
-    </div>
-
-    <div class="group">
-      <h3>Bark 推送</h3>
-      <div class="switch" style="margin-bottom:12px">
-        <input type="checkbox" id="bark-enabled">
-        <label for="bark-enabled">启用 Bark 推送</label>
-      </div>
-      <div class="field">
-        <label for="bark-server">服务地址</label>
-        <input class="input" id="bark-server" autocomplete="off" placeholder="https://api.day.app">
-      </div>
-      <div class="field">
-        <label for="bark-key">Device Key</label>
-        <input class="input" id="bark-key" type="password" autocomplete="off" placeholder="设备 Key">
-        <span class="hint" id="bark-key-hint"></span>
-      </div>
-    </div>
-
-    <div class="group">
-      <h3>R2 存储（附件）</h3>
-      <p class="hint" style="margin:0 0 12px">
-        附件走 S3 API，四项都填才能用，存放在桶内 <code>mail/att/</code>。
-      </p>
-      <div class="field">
-        <label for="r2-account">账号 ID</label>
-        <input class="input" id="r2-account" autocomplete="off"
-               placeholder="32 位十六进制，如 a1b2c3d4e5f6..."
-               spellcheck="false" autocapitalize="off">
-        <span class="hint">控制台右侧栏的 Account ID。</span>
-      </div>
-      <div class="field">
-        <label for="r2-access-key">Access Key ID</label>
-        <input class="input" id="r2-access-key" type="password" autocomplete="off"
-               placeholder="R2 API 令牌的 Access Key ID">
-        <span class="hint" id="r2-access-key-hint"></span>
-      </div>
-      <div class="field">
-        <label for="r2-secret-key">Secret Access Key</label>
-        <input class="input" id="r2-secret-key" type="password" autocomplete="off"
-               placeholder="R2 API 令牌的 Secret Access Key">
-        <span class="hint" id="r2-secret-key-hint"></span>
-      </div>
-      <div class="field">
-        <label for="r2-bucket">桶名</label>
-        <input class="input" id="r2-bucket" autocomplete="off" placeholder="my-mail-attachments">
-        <span class="hint">R2 里已建好的桶名。</span>
-      </div>
-    </div>
-
-    <div class="group">
-      <h3>收信过滤</h3>
-      <div class="field">
-        <label for="blocked-senders">发件人黑名单</label>
-        <textarea class="input textarea" id="blocked-senders" rows="4"
-                  placeholder="spam@example.com&#10;@ads.example.com&#10;bad-domain.com"></textarea>
-        <span class="hint">
-          一行一条，命中即静默丢弃。写法：<code>a@b.com</code> 精确、
-          <code>@b.com</code> 域名及子域、<code>b.com</code> 同 <code>@b.com</code>。
-        </span>
-      </div>
-      <div class="field">
-        <label for="allowed-recipients">收件人白名单</label>
-        <textarea class="input textarea" id="allowed-recipients" rows="4"
-                  placeholder="留空 = 接收本域任意地址"></textarea>
-        <span class="hint">
-          <strong>留空表示不限制</strong>，任意地址都收。填了只收名单内的，写法同黑名单。
-        </span>
-      </div>
-    </div>
-
-    <div class="group">
-      <h3>收信</h3>
-      <p class="hint" style="margin:0 0 12px">正文与元数据存 D1，附件字节存 R2。</p>
-      <div class="field">
-        <label for="max-message">单封邮件上限</label>
-        <div class="inline-input">
-          <input class="input" id="max-message" type="number" min="1" max="25" step="1">
-          <span class="unit">MB</span>
-        </div>
-        <span class="hint">超过直接拒收，Email Routing 硬上限 25MB。</span>
-      </div>
-      <div class="field">
-        <label for="max-body">正文入库上限</label>
-        <div class="inline-input">
-          <input class="input" id="max-body" type="number" min="4" max="900" step="4">
-          <span class="unit">KB</span>
-        </div>
-        <span class="hint">超出截断，防止撑爆 D1 行大小。</span>
-      </div>
-      <div class="field">
-        <label for="max-attachment">单个附件上限</label>
-        <div class="inline-input">
-          <input class="input" id="max-attachment" type="number" min="1" max="25" step="1">
-          <span class="unit">MB</span>
-        </div>
-        <span class="hint">超过则跳过转存，列表显示「附件过大，未保存」。</span>
-      </div>
-      <div class="field">
-        <label for="r2-concurrency">附件上传并发</label>
-        <input class="input" id="r2-concurrency" type="number" min="1" max="16" step="1">
-      </div>
-    </div>
-
-    <div class="group">
-      <h3>列表与会话</h3>
-      <div class="field">
-        <label for="page-size">每页条数</label>
-        <input class="input" id="page-size" type="number" min="1" max="100" step="1">
-      </div>
-      <div class="field">
-        <label for="page-size-max">每页条数上限</label>
-        <input class="input" id="page-size-max" type="number" min="1" max="200" step="1">
-      </div>
-      <div class="field">
-        <label for="jwt-ttl">登录有效期</label>
-        <div class="inline-input">
-          <input class="input" id="jwt-ttl" type="number" min="1" max="365" step="1">
-          <span class="unit">天</span>
-        </div>
-        <span class="hint">仅勾选「记住我」时生效。</span>
-      </div>
-    </div>
-
-    <p class="err" id="settings-err" role="alert"></p>
-    <div class="row-actions">
-      <button class="btn" type="button" id="settings-cancel">取消</button>
+<!-- ======================= 设置页 ======================= -->
+<section id="settings-view" hidden>
+  <form class="page" id="settings-form">
+    <header class="page-head">
+      <h2>设置</h2>
+      <div class="grow"></div>
+      <button class="btn" type="button" id="settings-back">返回</button>
       <button class="btn primary" type="submit" id="settings-save">保存</button>
+    </header>
+    <p class="err" id="settings-err" role="alert"></p>
+
+    <div class="page-body">
+      <div class="group">
+        <h3>外观</h3>
+        <div class="field">
+          <label for="site-name">站点名称</label>
+          <input class="input" id="site-name" autocomplete="off" maxlength="40" placeholder="MailFlare">
+        </div>
+        <div class="field">
+          <label for="site-logo">Logo 地址</label>
+          <input class="input" id="site-logo" autocomplete="off" placeholder="https://… 或 /logo.png">
+          <span class="hint">留空使用默认 ✉。支持 https 链接、站内路径或 data:image。</span>
+        </div>
+        <div class="field">
+          <label for="site-background">登录页背景</label>
+          <input class="input" id="site-background" autocomplete="off" placeholder="#0f172a 或 https://…/bg.jpg">
+          <span class="hint">填颜色（如 <code>#0f172a</code>）或图片地址。</span>
+        </div>
+      </div>
+
+      <div class="group">
+        <h3>站点</h3>
+        <div class="field">
+          <label for="public-url">站点地址</label>
+          <input class="input" id="public-url" autocomplete="off" placeholder="https://mail.example.com">
+          <span class="hint">推送消息里详情链接的前缀，留空则不带链接。</span>
+        </div>
+      </div>
+
+      <div class="group">
+        <h3>人机验证（Turnstile）</h3>
+        <p class="hint" style="margin:0 0 12px">两项都填才会在登录页显示验证框。</p>
+        <div class="field">
+          <label for="ts-site-key">Site Key</label>
+          <input class="input" id="ts-site-key" autocomplete="off" placeholder="0x4AAA...">
+        </div>
+        <div class="field">
+          <label for="ts-secret">Secret Key</label>
+          <input class="input" id="ts-secret" type="password" autocomplete="off" placeholder="0x4AAA...">
+          <span class="hint" id="ts-secret-hint"></span>
+        </div>
+        <div class="field">
+          <label for="ts-hostname">限定 Hostname（可选）</label>
+          <input class="input" id="ts-hostname" autocomplete="off" placeholder="mail.example.com">
+          <span class="hint">只接受该域名的 token，防止他人复用 Site Key。</span>
+        </div>
+      </div>
+
+      <div class="group">
+        <h3>Telegram 推送</h3>
+        <div class="switch" style="margin-bottom:12px">
+          <input type="checkbox" id="tg-enabled">
+          <label for="tg-enabled">启用 Telegram 推送</label>
+        </div>
+        <div class="field">
+          <label for="tg-token">Bot Token</label>
+          <input class="input" id="tg-token" type="password" autocomplete="off" placeholder="123456:ABC-DEF...">
+          <span class="hint" id="tg-token-hint"></span>
+        </div>
+        <div class="field">
+          <label for="tg-chat">Chat ID</label>
+          <input class="input" id="tg-chat" autocomplete="off" placeholder="123456789">
+          <span class="hint">私聊 ID 或群组 <code>-100…</code> ID。</span>
+        </div>
+      </div>
+
+      <div class="group">
+        <h3>Bark 推送</h3>
+        <div class="switch" style="margin-bottom:12px">
+          <input type="checkbox" id="bark-enabled">
+          <label for="bark-enabled">启用 Bark 推送</label>
+        </div>
+        <div class="field">
+          <label for="bark-server">服务地址</label>
+          <input class="input" id="bark-server" autocomplete="off" placeholder="https://api.day.app">
+        </div>
+        <div class="field">
+          <label for="bark-key">Device Key</label>
+          <input class="input" id="bark-key" type="password" autocomplete="off" placeholder="设备 Key">
+          <span class="hint" id="bark-key-hint"></span>
+        </div>
+      </div>
+
+      <div class="group">
+        <h3>R2 存储（附件）</h3>
+        <p class="hint" style="margin:0 0 12px">
+          附件走 S3 API，四项都填才能用，存放在桶内 <code>mail/att/</code>。
+        </p>
+        <div class="field">
+          <label for="r2-account">账号 ID</label>
+          <input class="input" id="r2-account" autocomplete="off" placeholder="32 位十六进制"
+                 spellcheck="false" autocapitalize="off">
+          <span class="hint">控制台右侧栏的 Account ID。</span>
+        </div>
+        <div class="field">
+          <label for="r2-access-key">Access Key ID</label>
+          <input class="input" id="r2-access-key" type="password" autocomplete="off" placeholder="Access Key ID">
+          <span class="hint" id="r2-access-key-hint"></span>
+        </div>
+        <div class="field">
+          <label for="r2-secret-key">Secret Access Key</label>
+          <input class="input" id="r2-secret-key" type="password" autocomplete="off" placeholder="Secret Access Key">
+          <span class="hint" id="r2-secret-key-hint"></span>
+        </div>
+        <div class="field">
+          <label for="r2-bucket">桶名</label>
+          <input class="input" id="r2-bucket" autocomplete="off" placeholder="my-mail-attachments">
+          <span class="hint">R2 里已建好的桶名。</span>
+        </div>
+      </div>
+
+      <div class="group">
+        <h3>收信过滤</h3>
+        <div class="field">
+          <label for="blocked-senders">发件人黑名单</label>
+          <textarea class="input textarea" id="blocked-senders" rows="4"
+                    placeholder="spam@example.com&#10;@ads.example.com&#10;bad-domain.com"></textarea>
+          <span class="hint">
+            一行一条，命中即静默丢弃。写法：<code>a@b.com</code> 精确、
+            <code>@b.com</code> 域名及子域、<code>b.com</code> 同 <code>@b.com</code>。
+          </span>
+        </div>
+        <div class="field">
+          <label for="allowed-recipients">收件人白名单</label>
+          <textarea class="input textarea" id="allowed-recipients" rows="4"
+                    placeholder="留空 = 接收本域任意地址"></textarea>
+          <span class="hint">
+            <strong>留空表示不限制</strong>，任意地址都收。填了只收名单内的，写法同黑名单。
+          </span>
+        </div>
+      </div>
+
+      <div class="group">
+        <h3>收信</h3>
+        <p class="hint" style="margin:0 0 12px">正文与元数据存 D1，附件字节存 R2。</p>
+        <div class="field">
+          <label for="max-message">单封邮件上限</label>
+          <div class="inline-input">
+            <input class="input" id="max-message" type="number" min="1" max="25" step="1">
+            <span class="unit">MB</span>
+          </div>
+          <span class="hint">超过直接拒收，Email Routing 硬上限 25MB。</span>
+        </div>
+        <div class="field">
+          <label for="max-body">正文入库上限</label>
+          <div class="inline-input">
+            <input class="input" id="max-body" type="number" min="4" max="900" step="4">
+            <span class="unit">KB</span>
+          </div>
+          <span class="hint">超出截断，防止撑爆 D1 行大小。</span>
+        </div>
+        <div class="field">
+          <label for="max-attachment">单个附件上限</label>
+          <div class="inline-input">
+            <input class="input" id="max-attachment" type="number" min="1" max="25" step="1">
+            <span class="unit">MB</span>
+          </div>
+          <span class="hint">超过则跳过转存，列表显示「附件过大，未保存」。</span>
+        </div>
+        <div class="field">
+          <label for="r2-concurrency">附件上传并发</label>
+          <input class="input" id="r2-concurrency" type="number" min="1" max="16" step="1">
+        </div>
+      </div>
+
+      <div class="group">
+        <h3>列表与会话</h3>
+        <div class="field">
+          <label for="page-size">每页条数</label>
+          <input class="input" id="page-size" type="number" min="1" max="100" step="1">
+        </div>
+        <div class="field">
+          <label for="page-size-max">每页条数上限</label>
+          <input class="input" id="page-size-max" type="number" min="1" max="200" step="1">
+        </div>
+        <div class="field">
+          <label for="jwt-ttl">登录有效期</label>
+          <div class="inline-input">
+            <input class="input" id="jwt-ttl" type="number" min="1" max="365" step="1">
+            <span class="unit">天</span>
+          </div>
+          <span class="hint">仅勾选「记住我」时生效。</span>
+        </div>
+      </div>
     </div>
   </form>
-</div>
+</section>
 
 <div id="toast" role="status" aria-live="polite"></div>
 <!-- APP_SCRIPT_START -->

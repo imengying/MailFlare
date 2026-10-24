@@ -54,6 +54,12 @@ impl Config {
 #[serde(default)]
 pub struct Settings {
     // ---- 站点 -----------------------------------------------------------
+    /// 站点名，显示在登录页与侧栏。
+    pub site_name: String,
+    /// 站点 Logo。留空则用默认的 ✉；填了按图片 URL 处理。
+    pub site_logo: String,
+    /// 登录页背景（CSS `background` 值，可以是颜色或图片 URL）。
+    pub site_background: String,
     /// 推送消息里「查看详情」链接的前缀。
     pub public_url: String,
 
@@ -108,6 +114,9 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            site_name: "MailFlare".to_string(),
+            site_logo: String::new(),
+            site_background: String::new(),
             public_url: String::new(),
             turnstile_site_key: String::new(),
             turnstile_secret: String::new(),
@@ -139,6 +148,12 @@ impl Default for Settings {
 impl Settings {
     /// 归一化并夹紧取值范围，写库前调用。
     pub fn normalized(mut self) -> Self {
+        self.site_name = self.site_name.trim().to_string();
+        self.site_logo = self.site_logo.trim().to_string();
+        self.site_background = self.site_background.trim().to_string();
+        if self.site_name.is_empty() {
+            self.site_name = "MailFlare".to_string();
+        }
         self.public_url = self.public_url.trim().trim_end_matches('/').to_string();
         self.turnstile_site_key = self.turnstile_site_key.trim().to_string();
         self.turnstile_secret = self.turnstile_secret.trim().to_string();
@@ -199,6 +214,9 @@ impl Settings {
     /// 密钥只回传「是否已设置」+ 尾部提示。
     pub fn redacted(&self) -> SettingsView<'_> {
         SettingsView {
+            site_name: &self.site_name,
+            site_logo: &self.site_logo,
+            site_background: &self.site_background,
             public_url: &self.public_url,
             turnstile_site_key: &self.turnstile_site_key,
             turnstile_secret_set: !self.turnstile_secret.is_empty(),
@@ -233,6 +251,9 @@ impl Settings {
 
 #[derive(Serialize)]
 pub struct SettingsView<'a> {
+    pub site_name: &'a str,
+    pub site_logo: &'a str,
+    pub site_background: &'a str,
     pub public_url: &'a str,
     pub turnstile_site_key: &'a str,
     pub turnstile_secret_set: bool,

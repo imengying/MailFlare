@@ -103,6 +103,10 @@ export interface AuthConfig {
   readonly turnstile_site_key: string;
   /** 后端是否配了 Secret（配了才需要前端拿 token）。 */
   readonly turnstile_required: boolean;
+  readonly site_name: string;
+  readonly site_logo: string;
+  /** 已归一成 CSS 值：颜色或 `url("...")`。 */
+  readonly site_background: string;
 }
 
 /**
@@ -111,6 +115,9 @@ export interface AuthConfig {
  * 后端**永不**返回密钥明文，只回传 `*_set` 与 `*_hint`。
  */
 export interface SettingsView {
+  readonly site_name: string;
+  readonly site_logo: string;
+  readonly site_background: string;
   readonly public_url: string;
   readonly turnstile_site_key: string;
   readonly turnstile_secret_set: boolean;
@@ -152,6 +159,9 @@ export interface SettingsView {
  * 用户真正填了的字段，绝不能把脱敏占位符（含 `*`）回传。
  */
 export interface SettingsPatch {
+  site_name?: string;
+  site_logo?: string;
+  site_background?: string;
   public_url?: string;
   turnstile_site_key?: string;
   turnstile_secret?: string;

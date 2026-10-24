@@ -85,6 +85,9 @@ async fn route(req: &mut Request, ctx: &ApiCtx<'_>, path: &str) -> AppResult<Res
             return Ok(ok_json(&AuthConfigResponse {
                 turnstile_site_key: ctx.settings.turnstile_site_key.clone(),
                 turnstile_required: ctx.settings.turnstile_enabled(),
+                site_name: ctx.settings.site_name.clone(),
+                site_logo: ctx.settings.site_logo.clone(),
+                site_background: public_background(&ctx.settings.site_background),
             }));
         }
         "/api/auth/login" => {
@@ -201,10 +204,17 @@ struct LoginResponse {
     expires_in: i64,
 }
 
+/// 登录页需要的公开配置。
+///
+/// 登录前就要拿到站点外观，所以这里也带上 `site_*`。注意**不能**放任何
+/// 密钥字段——这个接口无需鉴权。
 #[derive(Serialize)]
 struct AuthConfigResponse {
     turnstile_site_key: String,
     turnstile_required: bool,
+    site_name: String,
+    site_logo: String,
+    site_background: String,
 }
 
 #[derive(Serialize)]
@@ -643,6 +653,59 @@ async fn get_settings(ctx: &ApiCtx<'_>) -> AppResult<Response> {
     Ok(ok_json(&settings.redacted()))
 }
 
+/// 图片地址是否可安全地写进 CSS / `<img src>`。
+///
+/// 只放行 https、站内相对路径（单个 `/`，不能是 `//host`）和 `data:image`。
+/// 拒绝 `http:`（混合内容）与 `javascript:` 这类伪协议——它们会被直接塞进
+/// `style` 或 `src`，等于开了存储型 XSS 的口子。
+pub(crate) fn safe_image_source(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 2048 {
+        return false;
+    }
+    // 控制字符常被用来绕过前缀检查。
+    if value.chars().any(|c| c.is_control()) {
+        return false;
+    }
+    let lower = value.to_ascii_lowercase();
+    if lower.starts_with("data:image/") || lower.starts_with("https://") {
+        return true;
+    }
+    // `//host` 是协议相对 URL，会指向外部，必须排除。
+    value.starts_with('/') && !value.starts_with("//")
+}
+
+/// 把背景配置转成可直接用的 CSS 值。
+///
+/// 允许颜色（`#fff`、`rgb(...)`）或图片地址（包成 `url(...)`）。
+/// 输出要写进内联 `style`，所以能进来的值必须先过 [`safe_image_source`]。
+pub(crate) fn public_background(raw: &str) -> String {
+    let value = raw.trim();
+    if value.is_empty() {
+        return String::new();
+    }
+    let lower = value.to_ascii_lowercase();
+    let is_image = lower.starts_with("https://")
+        || lower.starts_with("data:image/")
+        || (value.starts_with('/') && !value.starts_with("//"));
+
+    if !is_image {
+        // 颜色值：只允许字母数字与常见符号，挡掉 `;` `}` 之类的 CSS 注入。
+        let ok = value.len() <= 64
+            && value.bytes().all(|b| {
+                b.is_ascii_alphanumeric()
+                    || matches!(b, b'#' | b'(' | b')' | b',' | b'.' | b'%' | b' ' | b'-')
+            });
+        return if ok { value.to_string() } else { String::new() };
+    }
+
+    if !safe_image_source(value) {
+        return String::new();
+    }
+    // 地址里可能有引号，转义后再包，避免提前闭合 url()。
+    format!("url(\"{}\")", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 /// 设置的可写字段。
 ///
 /// 全部 `Option`：`None` 表示「保持不变」，`Some("")` 表示「清空」。
@@ -650,6 +713,9 @@ async fn get_settings(ctx: &ApiCtx<'_>) -> AppResult<Response> {
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct SettingsPatch {
+    site_name: Option<String>,
+    site_logo: Option<String>,
+    site_background: Option<String>,
     public_url: Option<String>,
 
     turnstile_site_key: Option<String>,
@@ -714,6 +780,7 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
 
     // 非密钥字符串：有值就覆盖（空串即清空）。
     apply!(patch => settings;
+        site_name, site_logo, site_background,
         public_url, turnstile_site_key, turnstile_hostname,
         telegram_chat_id, bark_server,
         r2_account_id, r2_bucket,
@@ -739,6 +806,17 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
     settings = settings.normalized();
 
     // ---- 校验：把明显错误的配置挡在写库之前 -----------------------------
+    if settings.site_name.chars().count() > 40 {
+        return Err(AppError::BadRequest("站点名不能超过 40 个字符".into()));
+    }
+    if let Some(bad) = [&settings.site_logo, &settings.site_background]
+        .into_iter()
+        .find(|v| !v.is_empty() && !safe_image_source(v))
+    {
+        return Err(AppError::BadRequest(format!(
+            "图片地址「{bad}」不被允许：只接受 https 链接、站内相对路径或 data:image"
+        )));
+    }
     if settings.public_url.contains('?') || settings.public_url.contains('#') {
         return Err(AppError::BadRequest(
             "站点地址不能包含 ? 或 #，请只填协议 + 域名（可带路径）".into(),

@@ -1,5 +1,5 @@
 /**
- * 设置抽屉。
+ * 设置页。
  *
  * 所有可配置项都在这里（除管理员账号与 JWT 密钥——那三项在
  * Worker 环境变量里，改一次要重新部署）。
@@ -17,8 +17,10 @@ import { el } from "./dom.ts";
 export interface SettingsController {
   open(): Promise<void>;
   close(): void;
-  /** 保存；成功后自动关闭抽屉。 */
+  /** 保存；成功后自动返回。 */
   save(): Promise<void>;
+  /** 当前是否正在显示。 */
+  isOpen(): boolean;
 }
 
 /** 字节 → MB 的换算（表单用 MB 展示，后端用字节存储）。 */
@@ -38,8 +40,12 @@ function parseList(raw: string): string[] {
     .filter((item) => item.length > 0);
 }
 
-export function createSettingsController(api: ApiClient): SettingsController {
-  const mask = (): HTMLElement => el<HTMLElement>("#settings-mask");
+export function createSettingsController(
+  api: ApiClient,
+  /** 设置加载完成后回调，用于同步站点外观等副作用。 */
+  afterOpen?: (settings: SettingsView) => void,
+): SettingsController {
+  const view = (): HTMLElement => el<HTMLElement>("#settings-view");
   const errBox = (): HTMLElement => el<HTMLElement>("#settings-err");
 
   const text = (sel: string): HTMLInputElement => el<HTMLInputElement>(sel);
@@ -66,6 +72,9 @@ export function createSettingsController(api: ApiClient): SettingsController {
 
   /** 把服务端配置填进表单。 */
   const fill = (settings: SettingsView): void => {
+    text("#site-name").value = settings.site_name;
+    text("#site-logo").value = settings.site_logo;
+    text("#site-background").value = settings.site_background;
     text("#public-url").value = settings.public_url;
 
     text("#ts-site-key").value = settings.turnstile_site_key;
@@ -142,6 +151,9 @@ export function createSettingsController(api: ApiClient): SettingsController {
   /** 收集表单，只提交用户真正填了的字段。 */
   const collect = (): SettingsPatch => {
     const patch: SettingsPatch = {
+      site_name: text("#site-name").value.trim(),
+      site_logo: text("#site-logo").value.trim(),
+      site_background: text("#site-background").value.trim(),
       public_url: text("#public-url").value.trim(),
       turnstile_site_key: text("#ts-site-key").value.trim(),
       turnstile_hostname: text("#ts-hostname").value.trim(),
@@ -198,17 +210,25 @@ export function createSettingsController(api: ApiClient): SettingsController {
 
   return {
     async open(): Promise<void> {
-      mask().hidden = false;
       errBox().textContent = "";
       try {
-        fill(await api.request<SettingsView>("/api/settings"));
+        const settings = await api.request<SettingsView>("/api/settings");
+        fill(settings);
+        view().hidden = false;
+        view().scrollTop = 0;
+        afterOpen?.(settings);
       } catch (error) {
-        errBox().textContent = error instanceof Error ? error.message : "加载设置失败";
+        // 加载失败就停在原页面，用 toast 提示，不切到一个空表单。
+        throw error;
       }
     },
 
     close(): void {
-      mask().hidden = true;
+      view().hidden = true;
+    },
+
+    isOpen(): boolean {
+      return !view().hidden;
     },
 
     async save(): Promise<void> {
@@ -220,9 +240,9 @@ export function createSettingsController(api: ApiClient): SettingsController {
           method: "PUT",
           body: collect(),
         });
-        mask().hidden = true;
-        // 交由外层 toast，避免这里依赖 ui 模块。
-        mask().dispatchEvent(new CustomEvent("settings-saved", { bubbles: true }));
+        view().hidden = true;
+        // 交由外层处理 toast 与外观刷新，避免这里依赖 ui 模块。
+        view().dispatchEvent(new CustomEvent("settings-saved", { bubbles: true }));
       } catch (error) {
         errBox().textContent = error instanceof Error ? error.message : "保存失败";
       } finally {
