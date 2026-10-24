@@ -43,7 +43,6 @@ export function createSettingsController(
   const view = (): HTMLElement => el<HTMLElement>("#settings-view");
   const form = (): HTMLFormElement => el<HTMLFormElement>("#settings-form");
   const errBox = (): HTMLElement => el<HTMLElement>("#settings-err");
-  const status = (): HTMLElement => el<HTMLElement>("#settings-status");
   const text = (sel: string): HTMLInputElement => el<HTMLInputElement>(sel);
   const area = (sel: string): HTMLTextAreaElement => el<HTMLTextAreaElement>(sel);
   const num = (sel: string): HTMLInputElement => el<HTMLInputElement>(sel);
@@ -59,8 +58,6 @@ export function createSettingsController(
 
   const setDirty = (value: boolean): void => {
     dirty = value;
-    status().textContent = value ? "有未保存的更改" : "设置更改会在保存后生效";
-    status().classList.toggle("dirty", value);
   };
 
   const show = (open: boolean): void => {
@@ -331,7 +328,6 @@ export function createSettingsController(
         if (request !== saveVersion) return;
         fill(saved);
         setDirty(false);
-        status().textContent = "所有更改已保存";
         view().dispatchEvent(new CustomEvent("settings-saved", { bubbles: true }));
       } catch (error) {
         if (request !== saveVersion) return;

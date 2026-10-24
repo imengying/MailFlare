@@ -241,16 +241,16 @@
   .imgbar button { margin-left: auto; }
   .detail-back { display: none; }
 
-  #settings-view { overflow: hidden; display: flex; flex-direction: column; background: var(--bg); }
-  .settings-form { width: min(920px, 100%); height: 100%; min-height: 0; margin: 0 auto; display: flex; flex-direction: column; }
+  #settings-view { position: relative; overflow: hidden; display: flex; flex-direction: column; background: var(--bg); }
+  .settings-form { position: relative; width: min(920px, 100%); height: 100%; min-height: 0; margin: 0 auto; display: flex; flex-direction: column; }
   .settings-head { display: flex; align-items: flex-start; gap: 12px; padding: 28px 28px 20px; flex-shrink: 0; }
   .settings-heading { flex: 1; min-width: 0; }
   .settings-heading h2 { margin: 0; font-size: 22px; line-height: 1.3; letter-spacing: -.4px; }
   .settings-heading p { margin: 5px 0 0; color: var(--text-faint); font-size: 12.5px; }
-  .settings-close { flex-shrink: 0; margin-top: 1px; }
+  .settings-close { flex-shrink: 0; margin-top: -5px; margin-right: -8px; }
   .settings-error { margin: 0 28px 16px; padding: 10px 12px; border-radius: 9px; background: var(--danger-soft); flex-shrink: 0; }
   .settings-error:empty { display: none; }
-  .settings-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; align-content: start; gap: 14px; padding: 0 28px 28px; }
+  .settings-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; align-content: start; gap: 14px; padding: 0 28px 100px; }
   .settings-section { min-width: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
   .settings-section-head { display: flex; align-items: flex-start; gap: 12px; padding: 20px 22px 16px; }
   .settings-section-icon { display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 auto; border-radius: 9px; color: var(--accent); background: var(--accent-soft); }
@@ -269,10 +269,13 @@
   .channel-title h4 { margin: 0; font-size: 13px; font-weight: 650; }
   .channel-head .switch { gap: 7px; }
   .channel-head .switch label { font-size: 12px; color: var(--text-dim); }
-  .settings-footer { display: flex; align-items: center; gap: 16px; padding: 14px 28px max(14px, env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
-  .settings-status { color: var(--text-faint); font-size: 12px; }
-  .settings-status.dirty { color: var(--text-dim); }
-  #settings-save { margin-left: auto; }
+  #settings-save {
+    position: absolute; right: 28px; bottom: max(24px, calc(env(safe-area-inset-bottom) + 12px)); z-index: 6;
+    min-height: 46px; padding: 12px 21px; border-radius: 13px;
+    box-shadow: 0 10px 28px -9px var(--accent), 0 4px 12px rgba(24, 31, 56, .16);
+  }
+  #settings-save:hover:not(:disabled) { box-shadow: 0 13px 32px -9px var(--accent), 0 5px 14px rgba(24, 31, 56, .2); }
+  #app-view.settings-open .toolbar { display: none; }
   @media (min-width: 1200px) {
     .settings-grid.two-column, .notification-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
@@ -319,7 +322,6 @@
     .body-wrap { padding: 18px 20px 32px; }
     .settings-head { padding-inline: 22px; }
     .settings-content { padding-inline: 22px; }
-    .settings-footer { padding-inline: 22px; }
   }
   @media (max-width: 600px) {
     .login-card { padding: 30px 24px; border-radius: 18px; }
@@ -345,12 +347,12 @@
     .settings-head { align-items: center; padding: 20px 16px 16px; }
     .settings-heading h2 { font-size: 20px; }
     .settings-heading p { display: none; }
-    .settings-close .button-label { display: none; }
+    .settings-close { margin-top: 0; margin-right: -8px; }
     .settings-error { margin: 0 16px 14px; }
-    .settings-content { gap: 12px; padding: 0 12px 20px; }
+    .settings-content { gap: 12px; padding: 0 12px 96px; }
     .settings-section-head { padding: 17px 16px 14px; }
     .settings-section-body { padding: 0 16px 18px; }
-    .settings-footer { gap: 12px; padding: 12px 16px max(12px, env(safe-area-inset-bottom)); }
+    #settings-save { right: 20px; bottom: max(20px, calc(env(safe-area-inset-bottom) + 10px)); }
   }
   .confirm-dialog { width: min(420px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--border); border-radius: 18px; background: var(--surface); color: var(--text); box-shadow: var(--shadow-lg); }
   .confirm-dialog::backdrop { background: rgba(10, 14, 25, .45); backdrop-filter: blur(3px); }
@@ -457,7 +459,7 @@
               <h2 id="settings-title" tabindex="-1">设置</h2>
               <p>管理你的邮箱、外观与通知</p>
             </div>
-            <button class="btn sm ghost settings-close" type="button" id="settings-back" title="返回邮件" aria-label="返回邮件"><span data-icon="close"></span><span class="button-label">返回</span></button>
+            <button class="btn sm ghost icon-btn settings-close" type="button" id="settings-back" title="关闭设置" aria-label="关闭设置"><span data-icon="close"></span></button>
           </header>
           <p class="err settings-error" id="settings-err" role="alert"></p>
           <div class="settings-content">
@@ -649,10 +651,7 @@
               </div>
             </section>
           </div>
-          <footer class="settings-footer">
-            <span class="settings-status" id="settings-status">设置更改会在保存后生效</span>
-            <button class="btn primary" type="submit" id="settings-save"><span data-icon="check"></span>保存更改</button>
-          </footer>
+          <button class="btn primary" type="submit" id="settings-save"><span data-icon="check"></span>保存</button>
         </form>
       </section>
     </div>
