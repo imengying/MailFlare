@@ -6,41 +6,55 @@
 <meta name="color-scheme" content="light dark">
 <title>MailFlare</title>
 <style>
-  /* ---------- 设计变量 ---------- */
   :root {
-    --bg: #f6f7f9;
+    --bg: #f5f6fa;
     --surface: #ffffff;
-    --surface-2: #f1f3f6;
-    --border: #e3e6ec;
-    --text: #14161a;
-    --text-dim: #6b7280;
-    --text-faint: #9aa1ad;
-    --accent: #2f6bff;
-    --accent-soft: #eaf0ff;
-    --danger: #d7263d;
-    --ok: #128a5b;
+    --surface-2: #f7f8fb;
+    --surface-3: #eef1f6;
+    --border: #e6e8ef;
+    --border-strong: #d7dbe5;
+    --text: #20232d;
+    --text-dim: #656b7d;
+    --text-faint: #687386;
+    --accent: #4967e8;
+    --accent-hover: #3b57cf;
+    --accent-soft: #edf0ff;
+    --accent-ring: rgba(73, 103, 232, .14);
+    --on-accent: #ffffff;
+    --danger: #d44357;
+    --danger-soft: #fff0f2;
+    --danger-solid: #c9374e;
+    --ok: #18845d;
     --radius: 12px;
-    --shadow: 0 1px 2px rgba(16,24,40,.04), 0 8px 24px -12px rgba(16,24,40,.12);
-    --sidebar-w: 232px;
+    --shadow: 0 1px 2px rgba(24, 31, 56, .03), 0 10px 30px -18px rgba(24, 31, 56, .18);
+    --shadow-lg: 0 24px 70px -24px rgba(24, 31, 56, .28);
+    --sidebar-w: 240px;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #0e1116;
-      --surface: #151920;
-      --surface-2: #1b202a;
-      --border: #262d38;
-      --text: #e8ebf0;
-      --text-dim: #9aa4b2;
-      --text-faint: #6b7684;
-      --accent: #6d9bff;
-      --accent-soft: #1c2740;
-      --danger: #ff6b7f;
-      --ok: #3ecf8e;
-      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px -16px rgba(0,0,0,.6);
+      --bg: #101218;
+      --surface: #181b23;
+      --surface-2: #1d212b;
+      --surface-3: #252a36;
+      --border: #2a2f3b;
+      --border-strong: #3a4150;
+      --text: #eceef5;
+      --text-dim: #a1a8b9;
+      --text-faint: #8b95a9;
+      --accent: #91a7ff;
+      --accent-hover: #acbcff;
+      --accent-soft: #252d4a;
+      --accent-ring: rgba(145, 167, 255, .15);
+      --on-accent: #151b34;
+      --danger: #ff899b;
+      --danger-soft: #3b232d;
+      --danger-solid: #c9455b;
+      --ok: #65d8ad;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .2), 0 12px 32px -20px rgba(0, 0, 0, .8);
+      --shadow-lg: 0 24px 70px -24px rgba(0, 0, 0, .8);
     }
   }
 
-  /* ---------- 基础 ---------- */
   *, *::before, *::after { box-sizing: border-box; }
   html, body { height: 100%; }
   body {
@@ -52,245 +66,294 @@
     -webkit-font-smoothing: antialiased;
   }
   button, input, textarea, select { font: inherit; color: inherit; }
-  button { cursor: pointer; }
+  button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
-  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
   [hidden] { display: none !important; }
+  ::selection { background: var(--accent-soft); color: var(--text); }
+  ::placeholder { color: var(--text-faint); opacity: 1; }
+  * { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+  .grow { flex: 1; min-width: 0; }
+  .icon { width: 18px; height: 18px; flex: 0 0 auto; display: block; }
 
   .btn {
-    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-    padding: 8px 14px; border-radius: 9px; border: 1px solid var(--border);
-    background: var(--surface); font-weight: 500; transition: background .15s, border-color .15s;
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    min-height: 38px; padding: 8px 14px; border-radius: 10px;
+    border: 1px solid var(--border-strong); background: var(--surface);
+    color: var(--text-dim); font-weight: 550; line-height: 1.2;
+    transition: background .16s, border-color .16s, color .16s, box-shadow .16s, transform .16s;
     white-space: nowrap;
   }
-  .btn:hover { background: var(--surface-2); }
-  .btn:disabled { opacity: .55; cursor: not-allowed; }
-  .btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
-  .btn.primary:hover { filter: brightness(1.06); }
+  .btn:hover { background: var(--surface-2); border-color: var(--text-faint); color: var(--text); }
+  .btn:active:not(:disabled) { transform: translateY(1px); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--on-accent); }
   .btn.danger { color: var(--danger); }
+  .btn.danger:hover { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
   .btn.ghost { background: transparent; border-color: transparent; }
-  .btn.ghost:hover { background: var(--surface-2); }
-  .btn.sm { padding: 5px 10px; font-size: 13px; border-radius: 8px; }
+  .btn.ghost:hover { background: var(--surface-3); border-color: transparent; }
+  .btn.sm { min-height: 34px; padding: 7px 11px; font-size: 12.5px; border-radius: 9px; }
+  .btn.sm .icon { width: 16px; height: 16px; }
+  .icon-btn { width: 38px; padding: 8px; }
+  .icon-btn.sm { width: 34px; }
 
-  .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+  .field { display: flex; flex-direction: column; gap: 7px; margin-bottom: 17px; min-width: 0; }
+  .field:last-child { margin-bottom: 0; }
   .field > label { font-size: 13px; font-weight: 600; color: var(--text-dim); }
-  .field .hint { font-size: 12px; color: var(--text-faint); }
-  /* 数值 + 单位的组合输入框 */
-  .inline-input { display: flex; align-items: center; gap: 8px; }
-  .inline-input .input { flex: 1 1 auto; }
-  .unit { flex: 0 0 auto; font-size: 13px; color: var(--text-faint); }
-  /* 多行地址列表输入框：等宽字体便于对齐域名 */
-  .textarea {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 13px;
-    line-height: 1.6;
-    resize: vertical;
-    min-height: 84px;
-  }
+  .hint { color: var(--text-faint); font-size: 12px; line-height: 1.6; }
+  code { padding: 2px 5px; border-radius: 5px; background: var(--surface-3); font-size: .92em; }
+  .inline-input { display: flex; align-items: center; gap: 10px; }
+  .inline-input .input { flex: 1 1 auto; min-width: 0; }
+  .unit { flex: 0 0 auto; font-size: 12px; color: var(--text-faint); }
   .input {
-    width: 100%; padding: 9px 12px; border-radius: 9px;
-    border: 1px solid var(--border); background: var(--surface);
-    transition: border-color .15s, box-shadow .15s;
+    width: 100%; min-height: 42px; padding: 10px 12px; border-radius: 10px;
+    border: 1px solid var(--border-strong); background: var(--surface);
+    transition: border-color .16s, box-shadow .16s, background .16s;
   }
-  .input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-  .switch { display: flex; align-items: center; gap: 10px; }
-  .switch input { width: 38px; height: 22px; appearance: none; background: var(--surface-2);
-    border: 1px solid var(--border); border-radius: 99px; position: relative; transition: background .15s; }
-  .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
-    border-radius: 50%; background: var(--text-faint); transition: transform .15s, background .15s; }
-  .switch input:checked { background: var(--accent-soft); border-color: var(--accent); }
-  .switch input:checked::after { transform: translateX(16px); background: var(--accent); }
+  .input:hover { border-color: var(--text-faint); }
+  .input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+  .textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.7; resize: vertical; min-height: 108px; }
+  .switch { display: flex; align-items: center; gap: 10px; width: fit-content; cursor: pointer; }
+  .switch label { cursor: pointer; font-size: 13px; font-weight: 550; }
+  .switch input { width: 38px; height: 22px; flex: 0 0 auto; margin: 0; appearance: none; background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: 99px; position: relative; transition: background .16s, border-color .16s; }
+  .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--text-faint); transition: transform .16s, background .16s; }
+  .switch input:checked { background: var(--accent); border-color: var(--accent); }
+  .switch input:checked::after { transform: translateX(16px); background: var(--on-accent); }
 
-  /* ---------- 登录 ---------- */
   #login-view {
-    min-height: 100%; display: grid; place-items: center; padding: 24px;
-    background:
-      radial-gradient(1000px 500px at 50% -10%, var(--accent-soft), transparent 70%),
-      var(--bg);
+    min-height: 100%; display: grid; place-items: center; padding: 32px 20px;
+    background: radial-gradient(900px 550px at 50% -15%, var(--accent-soft), transparent 72%), var(--bg);
+    background-attachment: fixed;
   }
   .login-card {
-    width: min(400px, 100%); background: var(--surface); border: 1px solid var(--border);
-    border-radius: 16px; padding: 28px; box-shadow: var(--shadow);
+    width: min(408px, 100%); background: color-mix(in srgb, var(--surface) 94%, transparent);
+    border: 1px solid var(--border); border-radius: 22px; padding: 36px;
+    box-shadow: var(--shadow-lg); backdrop-filter: blur(18px);
   }
-  .brand { display: flex; align-items: center; gap: 10px; font-size: 19px; font-weight: 700; letter-spacing: -.2px; }
-  .brand .logo {
-    width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
-    background: linear-gradient(140deg, var(--accent), #8b5cf6); color: #fff; font-size: 15px;
-  }
-  /* 登录页品牌居中：侧栏那份保持左对齐。 */
-  .login-brand {
-    flex-direction: column; justify-content: center; text-align: center;
-    gap: 12px; margin-bottom: 24px;
-  }
-  .login-brand .logo { width: 46px; height: 46px; border-radius: 14px; font-size: 22px; }
-  .login-brand .brand-name { font-size: 22px; }
-  /* 自定义 logo：是图片时去掉渐变底，让它自己显示 */
-  .logo.custom { background: none; overflow: hidden; }
+  .brand { display: flex; align-items: center; gap: 11px; min-width: 0; font-size: 18px; font-weight: 700; letter-spacing: -.4px; }
+  .brand-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .brand .logo { width: 34px; height: 34px; flex: 0 0 auto; border-radius: 11px; display: grid; place-items: center; background: linear-gradient(140deg, #5875ee, #795bd9); color: #fff; box-shadow: 0 6px 16px -7px var(--accent); }
+  .brand .logo .icon { width: 18px; height: 18px; }
+  .login-brand { flex-direction: column; justify-content: center; text-align: center; gap: 16px; margin-bottom: 32px; }
+  .login-brand .logo { width: 58px; height: 58px; border-radius: 18px; }
+  .login-brand .logo .icon { width: 27px; height: 27px; }
+  .login-brand .brand-name { max-width: 100%; font-size: 25px; letter-spacing: -.7px; }
+  .logo.custom { background: none; box-shadow: none; overflow: hidden; }
   .logo.custom img { width: 100%; height: 100%; object-fit: contain; display: block; }
-  .err { color: var(--danger); font-size: 13px; min-height: 18px; margin: 4px 0 10px; }
+  .err { color: var(--danger); font-size: 12.5px; line-height: 1.5; min-height: 19px; margin: 0 0 8px; }
+  .err:empty { margin-bottom: 0; }
+  .login-submit { width: 100%; min-height: 44px; margin-top: 3px; }
+  .login-submit > .icon { margin-left: auto; width: 16px; }
+  #turnstile-container { min-height: 65px; }
+  #turnstile-container > div { margin: auto; }
 
-  /* ---------- 应用布局 ---------- */
-  #app-view { display: grid; grid-template-columns: var(--sidebar-w) 1fr; height: 100dvh; }
-  aside {
-    border-right: 1px solid var(--border); background: var(--surface);
-    display: flex; flex-direction: column; padding: 16px 12px; gap: 6px; min-height: 0;
-  }
-  aside .brand { padding: 4px 8px 14px; }
-  .nav-item {
-    display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 9px;
-    border: none; background: transparent; text-align: left; width: 100%; color: var(--text-dim);
-    font-weight: 500;
-  }
+  #app-view { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); height: 100dvh; overflow: hidden; }
+  #sidebar { border-right: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; padding: 22px 14px 16px; gap: 5px; min-height: 0; z-index: 20; }
+  #sidebar .brand { padding: 0 10px 26px; }
+  .nav-item { display: flex; align-items: center; gap: 11px; min-height: 43px; padding: 10px 12px; border-radius: 10px; border: none; background: transparent; text-align: left; width: 100%; color: var(--text-dim); font-weight: 500; transition: background .15s, color .15s; }
+  .nav-item .icon { width: 19px; height: 19px; color: var(--text-faint); }
   .nav-item:hover { background: var(--surface-2); color: var(--text); }
-  .nav-item.active { background: var(--accent-soft); color: var(--accent); }
-  .nav-item .count {
-    margin-left: auto; font-size: 12px; background: var(--accent); color: #fff;
-    padding: 1px 7px; border-radius: 99px; min-width: 20px; text-align: center;
-  }
-  aside .spacer { flex: 1; }
+  .nav-item:hover .icon { color: var(--text-dim); }
+  .nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .nav-item.active .icon { color: var(--accent); }
+  .nav-item .count { margin-left: auto; font-size: 11px; line-height: 18px; background: var(--accent); color: var(--on-accent); padding: 0 6px; border-radius: 99px; min-width: 20px; text-align: center; }
+  #sidebar .spacer { flex: 1; }
+  #open-settings { margin-top: 8px; }
+  #logout { border-top: 1px solid var(--border); border-radius: 0; margin-top: 10px; padding-top: 17px; }
+  .sidebar-backdrop { display: none; }
 
   main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
-  .toolbar {
-    display: flex; align-items: center; gap: 10px; padding: 12px 16px;
-    border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0;
-  }
-  .toolbar .title { font-weight: 650; font-size: 15px; }
-  .toolbar .grow { flex: 1; }
-  .search {
-    position: relative; flex: 0 1 300px;
-  }
-  .search input { padding-left: 32px; }
-  .search::before {
-    content: "⌕"; position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
-    color: var(--text-faint); font-size: 15px; pointer-events: none;
-  }
+  .toolbar { display: flex; align-items: center; gap: 10px; min-height: 72px; padding: 14px 22px; border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
+  .toolbar-heading { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+  .toolbar .title { margin: 0; font-weight: 650; font-size: 17px; letter-spacing: -.25px; white-space: nowrap; }
+  .list-count { color: var(--text-faint); font-size: 12px; white-space: nowrap; }
+  .search { position: relative; flex: 0 1 280px; min-width: 130px; }
+  .search > .icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; color: var(--text-faint); pointer-events: none; }
+  .search input { min-height: 38px; padding: 8px 12px 8px 36px; border-color: transparent; background: var(--surface-2); font-size: 13px; }
+  .search input:focus { background: var(--surface); border-color: var(--accent); }
+  .menu-btn { display: none; }
 
-  .split { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; flex: 1; min-height: 0; }
-  .list-pane { border-right: 1px solid var(--border); overflow: auto; background: var(--surface); min-height: 0; }
-  .detail-pane { overflow: auto; min-height: 0; display: flex; flex-direction: column; }
-
-  .mail-item {
-    display: block; width: 100%; text-align: left; border: none; background: transparent;
-    padding: 12px 16px; border-bottom: 1px solid var(--border); color: inherit;
-    position: relative; transition: background .12s;
-  }
+  .split { display: grid; grid-template-columns: minmax(300px, 370px) minmax(0, 1fr); flex: 1; min-height: 0; }
+  .list-pane { border-right: 1px solid var(--border); overflow-y: auto; overscroll-behavior: contain; background: var(--surface); min-height: 0; }
+  .detail-pane { overflow-y: auto; overscroll-behavior: contain; min-height: 0; display: flex; flex-direction: column; }
+  .mail-item { display: block; width: 100%; text-align: left; border: none; background: transparent; padding: 17px 18px 16px; border-bottom: 1px solid var(--border); color: inherit; position: relative; transition: background .13s; }
   .mail-item:hover { background: var(--surface-2); }
   .mail-item.selected { background: var(--accent-soft); }
-  .mail-item.selected::before {
-    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent);
-  }
-  .mail-item .row1 { display: flex; align-items: baseline; gap: 8px; }
-  .mail-item .from { font-weight: 600; font-size: 13.5px; flex: 1;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .mail-item .when { font-size: 11.5px; color: var(--text-faint); flex-shrink: 0; }
-  .mail-item .subj { font-size: 13px; margin-top: 3px; overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap; }
-  .mail-item .snippet { font-size: 12.5px; color: var(--text-faint); margin-top: 3px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .mail-item.unread .from, .mail-item.unread .subj { font-weight: 700; }
-  .mail-item.unread .from::before {
-    content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%;
-    background: var(--accent); margin-right: 6px; vertical-align: middle;
-  }
-  .clip { color: var(--text-faint); font-size: 11px; }
+  .mail-item.selected::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
+  .mail-item .row1 { display: flex; align-items: center; gap: 8px; }
+  .mail-item .from { font-weight: 550; font-size: 13px; color: var(--text-dim); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mail-item .when { font-size: 11px; color: var(--text-faint); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+  .mail-item .subj { font-size: 13.5px; font-weight: 550; margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mail-item .snippet { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-faint); margin-top: 5px; min-width: 0; }
+  .snippet-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .attachment-tag { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; color: var(--text-dim); font-size: 11px; }
+  .attachment-tag .icon { width: 13px; height: 13px; }
+  .mail-item.unread .from, .mail-item.unread .subj { color: var(--text); font-weight: 650; }
+  .unread-dot { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--accent); }
+  .mail-item:not(.unread) .unread-dot { visibility: hidden; }
+  .load-more { width: calc(100% - 32px); margin: 16px; }
 
-  .empty { padding: 56px 24px; text-align: center; color: var(--text-faint); }
-  .empty .big { font-size: 30px; margin-bottom: 8px; opacity: .7; }
+  .empty { margin: auto; width: 100%; padding: 56px 28px; text-align: center; color: var(--text-dim); }
+  .empty-icon { display: grid; place-items: center; width: 60px; height: 60px; margin: 0 auto 18px; border-radius: 18px; color: var(--accent); background: var(--accent-soft); }
+  .empty-icon .icon { width: 27px; height: 27px; }
+  .empty h2 { margin: 0 0 7px; font-size: 16px; font-weight: 600; color: var(--text); }
+  .empty p { max-width: 310px; margin: 0 auto; color: var(--text-faint); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+  .list-pane > .empty { padding-top: 70px; }
+  .list-pane .empty-icon { width: 46px; height: 46px; border-radius: 14px; }
+  .list-pane .empty-icon .icon { width: 22px; height: 22px; }
 
-  .detail-head { padding: 18px 22px; border-bottom: 1px solid var(--border); background: var(--surface); }
-  .detail-subject { font-size: 18px; font-weight: 650; line-height: 1.35; margin: 0 0 10px; word-break: break-word; }
-  .meta-line { font-size: 12.5px; color: var(--text-dim); display: flex; flex-wrap: wrap; gap: 4px 14px; }
-  .meta-line b { color: var(--text); font-weight: 600; }
-  .detail-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
-
-  .tabs { display: flex; gap: 4px; padding: 10px 22px 0; }
-  .tab {
-    padding: 6px 12px; border-radius: 8px 8px 0 0; border: 1px solid transparent;
-    border-bottom: none; background: transparent; font-size: 13px; color: var(--text-dim);
-  }
-  .tab.active { background: var(--surface); border-color: var(--border); color: var(--text); font-weight: 600; }
-
-  .body-wrap { padding: 0 22px 32px; }
-  .body-scroll {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 0 var(--radius) var(--radius) var(--radius);
-    padding: 20px; min-height: 200px;
-  }
-  .text-body { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.7; margin: 0; }
-  /* 邮件 HTML 一律放进 sandbox iframe，彻底隔离脚本 */
-  iframe.mail-html {
-    width: 100%; border: 1px solid var(--border); border-radius: var(--radius);
-    background: #fff; min-height: 420px; display: block;
-  }
-
-  .attachments { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px; }
-  .att {
-    display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px;
-    border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2);
-    max-width: 100%; font-size: 12.5px;
-  }
-  .att a { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-  .att .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+  .detail-head { padding: 26px 32px 20px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .detail-top { display: flex; align-items: flex-start; gap: 16px; }
+  .detail-subject { flex: 1; min-width: 0; font-size: 21px; font-weight: 650; line-height: 1.4; letter-spacing: -.35px; margin: 0; overflow-wrap: anywhere; }
+  .detail-actions { display: flex; gap: 7px; flex-shrink: 0; }
+  .detail-meta { margin-top: 19px; }
+  .meta-line { font-size: 12.5px; color: var(--text-dim); display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 6px 12px; }
+  .meta-line dt { color: var(--text-faint); }
+  .meta-line dd { margin: 0; overflow-wrap: anywhere; }
+  .meta-time { margin-top: 9px; font-size: 12px; color: var(--text-faint); }
+  .body-wrap { width: 100%; max-width: 1040px; margin: 0 auto; padding: 24px 32px 40px; }
+  .body-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; min-height: 34px; }
+  .tabs { display: inline-flex; gap: 3px; padding: 3px; border-radius: 10px; background: var(--surface-3); }
+  .tab { display: inline-flex; align-items: center; gap: 6px; min-height: 29px; padding: 5px 10px; border: none; border-radius: 7px; background: transparent; font-size: 12px; color: var(--text-dim); }
+  .tab .icon { width: 14px; height: 14px; }
+  .tab:hover { color: var(--text); }
+  .tab.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(20, 25, 40, .08); font-weight: 550; }
+  .body-scroll { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 26px; min-height: 240px; box-shadow: var(--shadow); }
+  .text-body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.85; margin: 0; }
+  iframe.mail-html { width: 100%; border: 0; border-radius: 5px; background: #fff; min-height: 320px; display: block; }
+  .attachments { margin-top: 22px; }
+  .section-label { display: flex; align-items: center; gap: 7px; margin: 0 0 10px; color: var(--text-dim); font-size: 12.5px; font-weight: 600; }
+  .section-label .icon { width: 16px; height: 16px; }
+  .attachment-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 9px; }
+  .att { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 11px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+  .att > .icon { color: var(--text-faint); width: 18px; }
+  .att a, .att-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+  .att a:hover { text-decoration: none; }
+  .att a:hover .name { color: var(--accent); }
+  .att .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 12.5px; }
   .att .size { color: var(--text-faint); font-size: 11px; flex-shrink: 0; }
-  .att.missing { opacity: .6; }
-
-  .imgbar {
-    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-    padding: 8px 12px; margin-bottom: 10px; font-size: 12.5px;
-    background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px;
-    color: var(--text-dim);
-  }
+  .att.missing { opacity: .65; }
+  .imgbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; margin-bottom: 16px; font-size: 12px; background: var(--accent-soft); border-radius: 9px; color: var(--text-dim); }
+  .imgbar > span { display: inline-flex; align-items: center; gap: 8px; }
+  .imgbar .icon { width: 16px; height: 16px; color: var(--accent); }
   .imgbar button { margin-left: auto; }
+  .detail-back { display: none; }
 
-  /* ---------- 设置页 ---------- */
-  #settings-view {
-    min-height: 100dvh; background: var(--bg); overflow: auto;
-  }
-  .page {
-    width: min(760px, 100%); margin: 0 auto; padding: 20px 24px 64px;
-  }
-  /* 顶部操作条吸顶，长表单滚到哪儿都能保存 */
-  .page-head {
-    position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px;
-    padding: 16px 0 14px; margin-bottom: 4px;
-    background: var(--bg); border-bottom: 1px solid var(--border);
-  }
-  .page-head h2 { margin: 0; font-size: 18px; }
-  .page-body { padding-top: 18px; }
-  .group { border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
-  .group h3 { margin: 0 0 12px; font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
+  #settings-view { height: 100dvh; background: var(--bg); overflow-y: auto; }
+  .page { width: min(940px, 100%); margin: 0 auto; padding: 0 32px 72px; }
+  .page-head { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px; min-height: 94px; padding: 20px 0 17px; background: color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter: blur(16px); border-bottom: 1px solid var(--border); }
+  .page-heading h2 { margin: 0; font-size: 22px; line-height: 1.3; letter-spacing: -.4px; }
+  .page-heading p { margin: 4px 0 0; color: var(--text-faint); font-size: 12px; }
+  .settings-nav { display: flex; align-items: center; gap: 6px; padding: 17px 0 4px; overflow-x: auto; }
+  .settings-nav a { flex: 0 0 auto; padding: 5px 11px; border-radius: 7px; color: var(--text-dim); font-size: 12px; }
+  .settings-nav a:hover { text-decoration: none; background: var(--surface-3); color: var(--text); }
+  .page-body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px; padding-top: 16px; }
+  .group { min-width: 0; border: 1px solid var(--border); border-radius: 14px; padding: 22px; background: var(--surface); box-shadow: var(--shadow); scroll-margin-top: 110px; }
+  .group.span-2 { grid-column: 1 / -1; }
+  .group h3 { margin: 0 0 19px; font-size: 14px; font-weight: 650; display: flex; align-items: center; gap: 9px; }
+  .group h3 .icon { width: 17px; height: 17px; color: var(--accent); }
+  .group-description { margin: -8px 0 18px; }
+  .fields-grid-body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 20px; }
+  .group .switch { margin-bottom: 20px; }
+  .appearance-fields { grid-template-columns: minmax(160px, .7fr) minmax(0, 1.3fr); }
+  .appearance-fields .field:last-child { grid-column: 1 / -1; }
 
-  /* ---------- Toast ---------- */
-  #toast {
-    position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(10px);
-    background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 999px;
-    font-size: 13px; box-shadow: var(--shadow); opacity: 0; pointer-events: none;
-    transition: opacity .18s, transform .18s; z-index: 60; max-width: min(480px, 90vw);
-  }
+  #toast { position: fixed; left: 50%; bottom: max(28px, env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(10px); background: var(--text); color: var(--surface); padding: 11px 18px; border-radius: 11px; font-size: 13px; box-shadow: var(--shadow-lg); opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; z-index: 60; max-width: min(480px, 90vw); text-align: center; }
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-
-  .skeleton { background: linear-gradient(90deg, var(--surface-2) 25%, var(--border) 37%, var(--surface-2) 63%);
-    background-size: 400% 100%; animation: sk 1.3s ease infinite; border-radius: 8px; }
+  .skeleton { background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%); background-size: 300% 100%; animation: sk 1.4s ease infinite; border-radius: 6px; }
+  .mail-item.skeleton-row:hover { background: transparent; }
   @keyframes sk { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
 
-  /* ---------- 移动端 ---------- */
+  @media (min-width: 1500px) { .split { grid-template-columns: 400px minmax(0, 1fr); } }
+  @media (max-width: 1100px) {
+    .split { grid-template-columns: minmax(280px, 320px) minmax(0, 1fr); }
+    .detail-head { padding: 22px; }
+    .body-wrap { padding: 20px 22px 32px; }
+    .detail-top { flex-direction: column; }
+    .detail-actions { width: 100%; }
+    .toolbar { padding-inline: 16px; }
+    .toolbar-heading { display: block; }
+    .list-count { display: block; font-size: 11px; }
+  }
   @media (max-width: 860px) {
-    #app-view { grid-template-columns: 1fr; }
-    aside {
-      position: fixed; inset: 0; z-index: 20; border-right: none;
-      transform: translateX(-100%); transition: transform .2s ease;
-    }
-    aside.open { transform: translateX(0); }
-    .split { grid-template-columns: 1fr; }
+    #app-view { grid-template-columns: minmax(0, 1fr); }
+    #sidebar { position: fixed; inset: 0 auto 0 0; width: min(290px, 85vw); transform: translateX(-100%); transition: transform .2s ease; box-shadow: var(--shadow-lg); }
+    #sidebar.open { transform: translateX(0); }
+    .sidebar-backdrop { position: fixed; inset: 0; z-index: 15; display: block; width: 100%; border: 0; background: rgba(10, 14, 25, .42); backdrop-filter: blur(2px); }
+    .menu-btn { display: inline-flex; }
+    .split { grid-template-columns: minmax(0, 1fr); }
     .list-pane { border-right: none; }
-    /* 移动端是「列表 / 详情」二选一：靠 #app-view 上的 .showing 类切换。 */
-    #app-view .list-pane,
-    #app-view .detail-pane { display: none; }
+    #app-view .list-pane, #app-view .detail-pane { display: none; }
     #app-view:not(.showing) .list-pane { display: block; }
     #app-view.showing .detail-pane { display: flex; }
-    .menu-btn { display: inline-flex !important; }
+    .toolbar { min-height: 64px; padding: 11px 14px; gap: 8px; }
+    .toolbar-heading { display: block; }
+    .toolbar .title { font-size: 16px; }
+    .search { flex: 0 1 210px; }
+    .mail-item { padding: 16px; }
+    .detail-back { display: inline-flex; margin-right: auto; }
+    .detail-head { padding: 18px 20px; }
+    .detail-subject { font-size: 19px; }
+    .detail-top { gap: 12px; }
+    .body-wrap { padding: 18px 20px 32px; }
+    .page { padding-inline: 24px; }
   }
-  .menu-btn { display: none; }
+  @media (max-width: 600px) {
+    .login-card { padding: 30px 24px; border-radius: 18px; }
+    .toolbar { flex-wrap: wrap; }
+    .toolbar-heading { flex: 1; }
+    .toolbar > .grow { display: none; }
+    .search { order: 5; flex: 1 0 100%; }
+    .search input { min-height: 40px; }
+    #mark-all-read .button-label { display: none; }
+    #mark-all-read { width: 38px; padding: 8px; }
+    .detail-head { padding: 15px 16px 18px; }
+    .detail-top { gap: 12px; }
+    .detail-subject { font-size: 18px; }
+    .detail-actions { flex-wrap: wrap; }
+    .detail-actions .btn { flex: 0 0 auto; }
+    .detail-meta { margin-top: 16px; }
+    .meta-line { grid-template-columns: 48px minmax(0, 1fr); font-size: 12px; }
+    .body-wrap { padding: 14px 12px 28px; }
+    .body-scroll { padding: 18px; }
+    .body-toolbar { margin-inline: 4px; }
+    .attachment-list { grid-template-columns: 1fr; }
+    .imgbar button { margin-left: 0; }
+    .page { padding: 0 16px 48px; }
+    .page-head { min-height: 80px; padding: 14px 0; flex-wrap: wrap; }
+    .page-heading { flex: 1; }
+    .page-heading h2 { font-size: 20px; }
+    .page-heading p { display: none; }
+    .page-head .btn { min-height: 36px; padding: 7px 10px; font-size: 12px; }
+    .page-body { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+    .group.span-2 { grid-column: auto; }
+    .group { padding: 18px; }
+    .fields-grid-body { grid-template-columns: minmax(0, 1fr); }
+    .settings-nav { margin-inline: -4px; }
+  }
+  .confirm-dialog { width: min(420px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--border); border-radius: 18px; background: var(--surface); color: var(--text); box-shadow: var(--shadow-lg); }
+  .confirm-dialog::backdrop { background: rgba(10, 14, 25, .45); backdrop-filter: blur(3px); }
+  .confirm-content { padding: 26px; }
+  .confirm-icon { display: grid; place-items: center; width: 42px; height: 42px; margin-bottom: 17px; border-radius: 12px; background: var(--danger-soft); color: var(--danger); }
+  .confirm-icon .icon { width: 20px; height: 20px; }
+  .confirm-content h2 { margin: 0 0 8px; font-size: 18px; }
+  .confirm-content p { margin: 0; color: var(--text-dim); font-size: 13px; line-height: 1.75; overflow-wrap: anywhere; }
+  .confirm-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 24px; }
+  .btn.danger-solid { background: var(--danger-solid); border-color: var(--danger-solid); color: #fff; }
+  .btn.danger-solid:hover { background: var(--danger-solid); border-color: var(--danger-solid); color: #fff; filter: brightness(.92); }
+  .is-spinning .icon { animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (pointer: coarse) {
+    .btn, .btn.sm { min-height: 42px; }
+    .icon-btn, .icon-btn.sm { width: 42px; }
+    .nav-item { min-height: 46px; }
+    .tab { min-height: 34px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+  }
 </style>
 </head>
 <body>
@@ -299,7 +362,7 @@
 <section id="login-view">
   <form class="login-card" id="login-form" autocomplete="on">
     <div class="brand login-brand" id="login-brand">
-      <span class="logo" id="login-logo">✉</span>
+      <span class="logo" id="login-logo"><span data-icon="mail"></span></span>
       <span class="brand-name" id="login-name">MailFlare</span>
     </div>
 
@@ -322,42 +385,51 @@
     </div>
 
     <p class="err" id="login-err" role="alert"></p>
-    <button class="btn primary" id="login-btn" type="submit" style="width:100%">登 录</button>
+    <button class="btn primary login-submit" id="login-btn" type="submit"><span>登录</span><span data-icon="arrowRight"></span></button>
   </form>
 </section>
 
 <!-- ======================= 主界面 ======================= -->
 <div id="app-view" hidden>
-  <aside id="sidebar">
+  <aside id="sidebar" aria-label="邮件导航">
     <div class="brand" id="sidebar-brand">
-      <span class="logo" id="sidebar-logo">✉</span>
+      <span class="logo" id="sidebar-logo"><span data-icon="mail"></span></span>
       <span class="brand-name" id="sidebar-name">MailFlare</span>
     </div>
-    <button class="nav-item active" data-filter="all">
-      <span>📥</span> 全部邮件 <span class="count" id="count-unread" hidden></span>
+    <button class="nav-item active" data-filter="all" aria-current="page">
+      <span data-icon="inbox"></span><span>全部邮件</span>
+      <span class="count" id="count-unread" hidden></span>
     </button>
     <button class="nav-item" data-filter="unread">
-      <span>🔵</span> 未读
+      <span data-icon="unread"></span><span>未读邮件</span>
     </button>
-    <button class="nav-item" id="open-settings"><span>⚙️</span> 设置</button>
+    <button class="nav-item" id="open-settings"><span data-icon="settings"></span><span>设置</span></button>
     <div class="spacer"></div>
-    <button class="nav-item" id="logout"><span>↩</span> 退出登录</button>
+    <button class="nav-item" id="logout"><span data-icon="logout"></span><span>退出登录</span></button>
   </aside>
+  <button class="sidebar-backdrop" id="sidebar-backdrop" type="button" aria-label="关闭导航" tabindex="-1" hidden></button>
 
   <main>
     <div class="toolbar">
-      <button class="btn ghost menu-btn" id="toggle-sidebar" aria-label="菜单">☰</button>
-      <span class="title" id="list-title">全部邮件</span>
+      <button class="btn icon-btn ghost menu-btn" id="toggle-sidebar" aria-label="打开导航" aria-expanded="false" aria-controls="sidebar"><span data-icon="menu"></span></button>
+      <div class="toolbar-heading">
+        <h1 class="title" id="list-title" tabindex="-1">全部邮件</h1>
+        <span class="list-count" id="list-count" hidden></span>
+      </div>
       <div class="grow"></div>
-      <div class="search"><input class="input" id="search" type="search" placeholder="搜索当前列表…"></div>
-      <button class="btn sm" id="mark-all-read" title="全部标为已读">全部已读</button>
-      <button class="btn sm" id="refresh" title="刷新">↻</button>
+      <div class="search"><span data-icon="search"></span><input class="input" id="search" type="search" placeholder="搜索邮件" aria-label="搜索当前邮件列表"></div>
+      <button class="btn sm" id="mark-all-read" aria-label="全部标为已读" title="将全部邮件标为已读"><span data-icon="checks"></span><span class="button-label">全部已读</span></button>
+      <button class="btn icon-btn" id="refresh" title="刷新邮件" aria-label="刷新邮件"><span data-icon="refresh"></span></button>
     </div>
 
     <div class="split">
       <div class="list-pane" id="list-pane"></div>
       <div class="detail-pane" id="detail-pane">
-        <div class="empty"><div class="big">✉</div>选择左侧的一封邮件查看内容</div>
+        <div class="empty welcome-empty">
+          <div class="empty-icon"><span data-icon="mail"></span></div>
+          <h2>选择一封邮件</h2>
+          <p>在左侧选择邮件，即可阅读正文与管理附件</p>
+        </div>
       </div>
     </div>
   </main>
@@ -367,16 +439,27 @@
 <section id="settings-view" hidden>
   <form class="page" id="settings-form">
     <header class="page-head">
-      <h2>设置</h2>
+      <div class="page-heading">
+        <h2 id="settings-title" tabindex="-1">设置</h2>
+        <p>管理站点外观、收信规则与推送服务</p>
+      </div>
       <div class="grow"></div>
-      <button class="btn" type="button" id="settings-back">返回</button>
-      <button class="btn primary" type="submit" id="settings-save">保存</button>
+      <button class="btn" type="button" id="settings-back"><span data-icon="back"></span>返回</button>
+      <button class="btn primary" type="submit" id="settings-save"><span data-icon="check"></span>保存设置</button>
     </header>
     <p class="err" id="settings-err" role="alert"></p>
-
+    <nav class="settings-nav" aria-label="设置分类">
+      <a href="#settings-appearance">外观</a>
+      <a href="#settings-security">安全</a>
+      <a href="#settings-notify">推送</a>
+      <a href="#settings-storage">存储</a>
+      <a href="#settings-incoming">收信</a>
+      <a href="#settings-general">通用</a>
+    </nav>
     <div class="page-body">
-      <div class="group">
-        <h3>外观</h3>
+      <div class="group span-2" id="settings-appearance">
+        <h3><span data-icon="palette"></span>外观</h3>
+        <div class="fields-grid-body appearance-fields">
         <div class="field">
           <label for="site-name">站点名称</label>
           <input class="input" id="site-name" autocomplete="off" maxlength="40" placeholder="MailFlare">
@@ -391,10 +474,11 @@
           <input class="input" id="site-background" autocomplete="off" placeholder="#0f172a 或 https://…/bg.jpg">
           <span class="hint">填颜色（如 <code>#0f172a</code>）或图片地址。</span>
         </div>
+        </div>
       </div>
 
-      <div class="group">
-        <h3>站点</h3>
+      <div class="group" id="settings-site">
+        <h3><span data-icon="globe"></span>站点</h3>
         <div class="field">
           <label for="public-url">站点地址</label>
           <input class="input" id="public-url" autocomplete="off" placeholder="https://mail.example.com">
@@ -402,8 +486,8 @@
         </div>
       </div>
 
-      <div class="group">
-        <h3>人机验证（Turnstile）</h3>
+      <div class="group" id="settings-security">
+        <h3><span data-icon="shield"></span>人机验证</h3>
         <p class="hint" style="margin:0 0 12px">两项都填才会在登录页显示验证框。</p>
         <div class="field">
           <label for="ts-site-key">Site Key</label>
@@ -421,8 +505,8 @@
         </div>
       </div>
 
-      <div class="group">
-        <h3>Telegram 推送</h3>
+      <div class="group" id="settings-notify">
+        <h3><span data-icon="send"></span>Telegram</h3>
         <div class="switch" style="margin-bottom:12px">
           <input type="checkbox" id="tg-enabled">
           <label for="tg-enabled">启用 Telegram 推送</label>
@@ -439,8 +523,8 @@
         </div>
       </div>
 
-      <div class="group">
-        <h3>Bark 推送</h3>
+      <div class="group" id="settings-bark">
+        <h3><span data-icon="bell"></span>Bark</h3>
         <div class="switch" style="margin-bottom:12px">
           <input type="checkbox" id="bark-enabled">
           <label for="bark-enabled">启用 Bark 推送</label>
@@ -456,11 +540,12 @@
         </div>
       </div>
 
-      <div class="group">
-        <h3>R2 存储（附件）</h3>
+      <div class="group span-2" id="settings-storage">
+        <h3><span data-icon="database"></span>附件存储</h3>
         <p class="hint" style="margin:0 0 12px">
           附件走 S3 API，四项都填才能用，存放在桶内 <code>mail/att/</code>。
         </p>
+        <div class="fields-grid-body">
         <div class="field">
           <label for="r2-account">账号 ID</label>
           <input class="input" id="r2-account" autocomplete="off" placeholder="32 位十六进制"
@@ -482,10 +567,12 @@
           <input class="input" id="r2-bucket" autocomplete="off" placeholder="my-mail-attachments">
           <span class="hint">R2 里已建好的桶名。</span>
         </div>
+        </div>
       </div>
 
-      <div class="group">
-        <h3>收信过滤</h3>
+      <div class="group span-2" id="settings-incoming">
+        <h3><span data-icon="filter"></span>收信过滤</h3>
+        <div class="fields-grid-body">
         <div class="field">
           <label for="blocked-senders">发件人黑名单</label>
           <textarea class="input textarea" id="blocked-senders" rows="4"
@@ -503,58 +590,51 @@
             <strong>留空表示不限制</strong>，任意地址都收。填了只收名单内的，写法同黑名单。
           </span>
         </div>
-      </div>
-
-      <div class="group">
-        <h3>收信</h3>
-        <p class="hint" style="margin:0 0 12px">正文与元数据存 D1，附件字节存 R2。</p>
-        <div class="field">
-          <label for="max-message">单封邮件上限</label>
-          <div class="inline-input">
-            <input class="input" id="max-message" type="number" min="1" max="25" step="1">
-            <span class="unit">MB</span>
-          </div>
-          <span class="hint">超过直接拒收，Email Routing 硬上限 25MB。</span>
-        </div>
-        <div class="field">
-          <label for="max-body">正文入库上限</label>
-          <div class="inline-input">
-            <input class="input" id="max-body" type="number" min="4" max="900" step="4">
-            <span class="unit">KB</span>
-          </div>
-          <span class="hint">超出截断，防止撑爆 D1 行大小。</span>
-        </div>
-        <div class="field">
-          <label for="max-attachment">单个附件上限</label>
-          <div class="inline-input">
-            <input class="input" id="max-attachment" type="number" min="1" max="25" step="1">
-            <span class="unit">MB</span>
-          </div>
-          <span class="hint">超过则跳过转存，列表显示「附件过大，未保存」。</span>
-        </div>
-        <div class="field">
-          <label for="r2-concurrency">附件上传并发</label>
-          <input class="input" id="r2-concurrency" type="number" min="1" max="16" step="1">
         </div>
       </div>
 
-      <div class="group">
-        <h3>列表与会话</h3>
-        <div class="field">
-          <label for="page-size">每页条数</label>
-          <input class="input" id="page-size" type="number" min="1" max="100" step="1">
-        </div>
-        <div class="field">
-          <label for="page-size-max">每页条数上限</label>
-          <input class="input" id="page-size-max" type="number" min="1" max="200" step="1">
-        </div>
-        <div class="field">
-          <label for="jwt-ttl">登录有效期</label>
-          <div class="inline-input">
-            <input class="input" id="jwt-ttl" type="number" min="1" max="365" step="1">
-            <span class="unit">天</span>
+      <div class="group span-2" id="settings-limits">
+        <h3><span data-icon="inbox"></span>收信限制</h3>
+        <p class="group-description">正文与元数据存 D1，附件字节存 R2。</p>
+        <div class="fields-grid-body">
+          <div class="field">
+            <label for="max-message">单封邮件上限</label>
+            <div class="inline-input"><input class="input" id="max-message" type="number" min="1" max="25" step="1"><span class="unit">MB</span></div>
+            <span class="hint">超过直接拒收，Email Routing 硬上限 25MB。</span>
           </div>
-          <span class="hint">登录态的有效期，默认 7 天。</span>
+          <div class="field">
+            <label for="max-body">正文入库上限</label>
+            <div class="inline-input"><input class="input" id="max-body" type="number" min="4" max="900" step="4"><span class="unit">KB</span></div>
+            <span class="hint">超出截断，防止撑爆 D1 行大小。</span>
+          </div>
+          <div class="field">
+            <label for="max-attachment">单个附件上限</label>
+            <div class="inline-input"><input class="input" id="max-attachment" type="number" min="1" max="25" step="1"><span class="unit">MB</span></div>
+            <span class="hint">超过则跳过转存，列表显示「附件过大，未保存」。</span>
+          </div>
+          <div class="field">
+            <label for="r2-concurrency">附件上传并发</label>
+            <input class="input" id="r2-concurrency" type="number" min="1" max="16" step="1">
+          </div>
+        </div>
+      </div>
+
+      <div class="group span-2" id="settings-general">
+        <h3><span data-icon="sliders"></span>列表与会话</h3>
+        <div class="fields-grid-body">
+          <div class="field">
+            <label for="page-size">每页条数</label>
+            <input class="input" id="page-size" type="number" min="1" max="100" step="1">
+          </div>
+          <div class="field">
+            <label for="page-size-max">每页条数上限</label>
+            <input class="input" id="page-size-max" type="number" min="1" max="200" step="1">
+          </div>
+          <div class="field">
+            <label for="jwt-ttl">登录有效期</label>
+            <div class="inline-input"><input class="input" id="jwt-ttl" type="number" min="1" max="365" step="1"><span class="unit">天</span></div>
+            <span class="hint">登录态的有效期，默认 7 天。</span>
+          </div>
         </div>
       </div>
     </div>

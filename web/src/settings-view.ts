@@ -49,9 +49,28 @@ export function createSettingsController(
   const errBox = (): HTMLElement => el<HTMLElement>("#settings-err");
 
   const text = (sel: string): HTMLInputElement => el<HTMLInputElement>(sel);
+
+  const showApp = (): void => {
+    view().hidden = true;
+    el<HTMLElement>("#app-view").hidden = false;
+    // 焦点从被隐藏的表单移走，但不要触发手机浏览器的自动滚动。
+    el<HTMLElement>("#list-title").focus({ preventScroll: true });
+  };
+
   const area = (sel: string): HTMLTextAreaElement => el<HTMLTextAreaElement>(sel);
   const num = (sel: string): HTMLInputElement => el<HTMLInputElement>(sel);
   const check = (sel: string): HTMLInputElement => el<HTMLInputElement>(sel);
+
+  document.querySelectorAll<HTMLAnchorElement>(".settings-nav a").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      const target = document.querySelector<HTMLElement>(link.hash);
+      if (!target) return;
+      const scroller = view();
+      const top = scroller.scrollTop + target.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 110;
+      scroller.scrollTo({ top, behavior: "smooth" });
+    });
+  });
 
   /**
    * 密钥输入框的统一处理：永不回填明文，只更新 placeholder。
@@ -148,7 +167,7 @@ export function createSettingsController(
     return Math.round(parsed * scale);
   };
 
-  /** 收集表单，只提交用户真正填了的字段。 */
+  /** 收集表单；密钥与无效数值留空时保持不变。 */
   const collect = (): SettingsPatch => {
     const patch: SettingsPatch = {
       site_name: text("#site-name").value.trim(),
@@ -214,8 +233,11 @@ export function createSettingsController(
       try {
         const settings = await api.request<SettingsView>("/api/settings");
         fill(settings);
+        el<HTMLElement>("#app-view").hidden = true;
         view().hidden = false;
         view().scrollTop = 0;
+        window.scrollTo(0, 0);
+        el<HTMLElement>("#settings-title").focus({ preventScroll: true });
         afterOpen?.(settings);
       } catch (error) {
         // 加载失败就停在原页面，用 toast 提示，不切到一个空表单。
@@ -224,7 +246,7 @@ export function createSettingsController(
     },
 
     close(): void {
-      view().hidden = true;
+      showApp();
     },
 
     isOpen(): boolean {
@@ -235,18 +257,21 @@ export function createSettingsController(
       const button = el<HTMLButtonElement>("#settings-save");
       errBox().textContent = "";
       button.disabled = true;
+      button.setAttribute("aria-busy", "true");
       try {
         await api.request<SettingsView>("/api/settings", {
           method: "PUT",
           body: collect(),
         });
-        view().hidden = true;
+        showApp();
         // 交由外层处理 toast 与外观刷新，避免这里依赖 ui 模块。
         view().dispatchEvent(new CustomEvent("settings-saved", { bubbles: true }));
       } catch (error) {
         errBox().textContent = error instanceof Error ? error.message : "保存失败";
+        view().scrollTo({ top: 0, behavior: "smooth" });
       } finally {
         button.disabled = false;
+        button.removeAttribute("aria-busy");
       }
     },
   };

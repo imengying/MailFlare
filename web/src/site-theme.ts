@@ -6,6 +6,8 @@
  * `style.background`，不拼接 HTML。
  */
 
+import { icon } from "./icons.ts";
+
 /** 与后端 `AuthConfigResponse` 的站点字段对应。 */
 export interface SiteAppearance {
   readonly site_name: string;
@@ -13,20 +15,18 @@ export interface SiteAppearance {
   readonly site_background: string;
 }
 
-/** 默认 Logo 字形。 */
-const DEFAULT_GLYPH = "✉";
+function defaultLogo(container: HTMLElement): void {
+  container.classList.remove("custom");
+  container.replaceChildren(icon("mail"));
+}
 
 /**
- * 把 Logo 容器渲染成默认字形或自定义图片。
- *
- * `isImage` 判断放在前端做，因为后端只保证「地址安全」，不区分空串之外
- * 的语义；`data:image/`、`https://`、`/path` 都按图片处理。
+ * 把 Logo 容器渲染成默认 SVG 图标或自定义图片；地址合法性由后端校验。
  */
 function applyLogo(container: HTMLElement, source: string): void {
   const value = source.trim();
   if (!value) {
-    container.classList.remove("custom");
-    container.textContent = DEFAULT_GLYPH;
+    defaultLogo(container);
     return;
   }
 
@@ -35,12 +35,11 @@ function applyLogo(container: HTMLElement, source: string): void {
   const img = document.createElement("img");
   img.src = value;
   img.alt = "";
-  // 图片挂了就退回字形，避免出现破图图标。
+  // 图片挂了就退回默认图标，避免出现破图图标。
   img.addEventListener(
     "error",
     () => {
-      container.classList.remove("custom");
-      container.textContent = DEFAULT_GLYPH;
+      defaultLogo(container);
     },
     { once: true },
   );

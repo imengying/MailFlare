@@ -8,13 +8,14 @@
 import type { AuthConfig, EmailDetail, EmailList, LoginResult, SessionResult } from "./api-types.ts";
 import { ApiError, createApi } from "./api-client.ts";
 import { renderDetail, renderDetailBody, renderDetailError, renderDetailLoading } from "./detail-view.ts";
+import { mountIcons } from "./icons.ts";
 import { el, isMobile, prefersDark } from "./dom.ts";
 import { renderList } from "./list-view.ts";
 import { createSettingsController } from "./settings-view.ts";
 import { applyLoginBackground, applySiteIdentity } from "./site-theme.ts";
 import { createState } from "./state.ts";
 import { mountTurnstile, noopWidget, type TurnstileWidget } from "./turnstile.ts";
-import { toast } from "./ui.ts";
+import { confirmDialog, renderDetailEmpty, toast } from "./ui.ts";
 
 const state = createState();
 const api = createApi(() => showLogin());
@@ -22,13 +23,52 @@ const api = createApi(() => showLogin());
 let turnstile: TurnstileWidget = noopWidget();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
+let detailRequest = 0;
 
 // ===========================================================================
 // 视图切换
 // ===========================================================================
 
+function setSidebarOpen(open: boolean): void {
+  const sidebar = el<HTMLElement>("#sidebar");
+  const wasOpen = sidebar.classList.contains("open");
+  const visible = open && isMobile();
+  const main = el<HTMLElement>("main");
+  // 即使焦点仍在主区域，也先释放，再把主区域设为 inert。
+  if (visible && main.contains(document.activeElement)) {
+    (document.activeElement as HTMLElement).blur();
+  }
+  sidebar.classList.toggle("open", visible);
+  main.inert = visible;
+  el<HTMLButtonElement>("#toggle-sidebar").setAttribute("aria-label", visible ? "关闭导航" : "打开导航");
+  // 侧栏在手机上只是移出屏幕，inert 防止 Tab 聚焦到不可见按钮。
+  sidebar.inert = isMobile() && !visible;
+  el<HTMLButtonElement>("#sidebar-backdrop").hidden = !visible;
+  el<HTMLButtonElement>("#toggle-sidebar").setAttribute("aria-expanded", String(visible));
+  if (visible) {
+    sidebar.querySelector<HTMLButtonElement>(".nav-item.active")?.focus({ preventScroll: true });
+  } else if (wasOpen && isMobile()) {
+    el<HTMLButtonElement>("#toggle-sidebar").focus({ preventScroll: true });
+  }
+}
+
+function closeDetail(): void {
+  el<HTMLElement>("#app-view").classList.remove("showing");
+  if (isMobile()) el<HTMLElement>("#detail-pane").scrollTop = 0;
+}
+
+function setLoginBusy(busy: boolean): void {
+  const button = el<HTMLButtonElement>("#login-btn");
+  button.disabled = busy;
+  button.setAttribute("aria-busy", String(busy));
+  const label = button.querySelector("span");
+  if (label) label.textContent = busy ? "登录中…" : "登录";
+}
+
 function showLogin(): void {
   stopPolling();
+  detailRequest += 1;
+  setSidebarOpen(false);
   el<HTMLElement>("#app-view").hidden = true;
   el<HTMLElement>("#login-view").hidden = false;
   el<HTMLElement>("#settings-view").hidden = true;
@@ -41,6 +81,7 @@ async function enterApp(): Promise<void> {
   el<HTMLElement>("#login-view").hidden = true;
   el<HTMLElement>("#settings-view").hidden = true;
   el<HTMLElement>("#app-view").hidden = false;
+  setSidebarOpen(false);
   try {
     await loadList({ reset: true });
   } catch (error) {
@@ -87,8 +128,8 @@ const listHandlers = {
   onLoadMore: (): void => {
     // 先取到局部常量：闭包里访问 `state.nextCursor` 时 TS 无法保留收窄结果。
     const cursor = state.nextCursor;
-    if (cursor !== null) {
-      void loadList({ cursor });
+    if (cursor !== null && !state.loadingMore && !state.loadingList) {
+      void loadList({ cursor }).catch((error: unknown) => toast(errorMessage(error)));
     }
   },
 };
@@ -98,6 +139,7 @@ const listHandlers = {
 // ===========================================================================
 
 async function openEmail(id: string): Promise<void> {
+  const request = ++detailRequest;
   state.selectedId = id;
   state.activeTab = "html";
   state.allowRemoteImages = false;
@@ -107,6 +149,7 @@ async function openEmail(id: string): Promise<void> {
 
   try {
     const detail = await api.request<EmailDetail>(`/api/emails/${encodeURIComponent(id)}`);
+    if (request !== detailRequest || state.selectedId !== id) return;
     state.detail = detail;
     renderDetail(state, detailHandlers);
 
@@ -118,6 +161,7 @@ async function openEmail(id: string): Promise<void> {
       renderList(state, listHandlers);
     }
   } catch (error) {
+    if (request !== detailRequest) return;
     toast(errorMessage(error));
     renderDetailError(errorMessage(error));
   }
@@ -157,7 +201,7 @@ async function markUnread(id: string): Promise<void> {
       toast("已标为未读");
     }
     if (isMobile()) {
-      el<HTMLElement>("#app-view").classList.remove("showing");
+      closeDetail();
     }
   } catch (error) {
     toast(errorMessage(error));
@@ -168,19 +212,28 @@ async function deleteEmail(id: string): Promise<void> {
   const detail = state.detail;
   if (!detail || detail.id !== id) return;
 
-  const confirmed = confirm(
-    `确定删除这封邮件？\n\n主题：${detail.subject}\n\n附件与原始邮件也会一并从 R2 删除。`,
+  const confirmed = await confirmDialog(
+    "删除这封邮件？",
+    `「${detail.subject || "无主题"}」的正文与已保存附件将一并删除，且无法恢复。`,
+    "删除邮件",
   );
-  if (!confirmed) return;
+  if (!confirmed || state.detail?.id !== id) return;
 
+  const index = state.items.findIndex((item) => item.id === id);
   try {
     await api.request(`/api/emails/${encodeURIComponent(id)}`, { method: "DELETE" });
+    detailRequest += 1;
     state.items = state.items.filter((it) => it.id !== id);
     state.detail = null;
     state.selectedId = null;
-    el<HTMLElement>("#app-view").classList.remove("showing");
-    document.querySelector("#detail-pane")?.replaceChildren();
     renderList(state, listHandlers);
+    const next = state.items[Math.min(Math.max(index, 0), state.items.length - 1)];
+    if (!isMobile() && next) {
+      void openEmail(next.id);
+    } else {
+      closeDetail();
+      renderDetailEmpty();
+    }
     toast("已删除");
   } catch (error) {
     toast(errorMessage(error));
@@ -212,7 +265,6 @@ async function markAllRead(): Promise<void> {
 async function handleLogin(event: Event): Promise<void> {
   event.preventDefault();
 
-  const button = el<HTMLButtonElement>("#login-btn");
   const errBox = el<HTMLElement>("#login-err");
   errBox.textContent = "";
 
@@ -227,8 +279,7 @@ async function handleLogin(event: Event): Promise<void> {
     return;
   }
 
-  button.disabled = true;
-  button.textContent = "登录中…";
+  setLoginBusy(true);
 
   try {
     const result = await api.request<LoginResult>("/api/auth/login", {
@@ -251,8 +302,7 @@ async function handleLogin(event: Event): Promise<void> {
     if (turnstile.ready) el<HTMLElement>("#turnstile-field").hidden = false;
     turnstile.reset();
   } finally {
-    button.disabled = false;
-    button.textContent = "登 录";
+    setLoginBusy(false);
   }
 }
 
@@ -388,9 +438,7 @@ function bindEvents(): void {
     void settings.save();
   });
 
-  el<HTMLElement>("#settings-back").addEventListener("click", () => {
-    el<HTMLElement>("#settings-view").hidden = true;
-  });
+  el<HTMLElement>("#settings-back").addEventListener("click", () => settings.close());
 
   // 保存成功后重新应用外观，站点名与背景立刻生效。
   el<HTMLElement>("#settings-view").addEventListener("settings-saved", () => {
@@ -399,6 +447,7 @@ function bindEvents(): void {
   });
 
   el<HTMLElement>("#open-settings").addEventListener("click", () => {
+    setSidebarOpen(false);
     void settings.open().catch((error: unknown) => toast(errorMessage(error)));
   });
 
@@ -419,20 +468,25 @@ function bindEvents(): void {
     button.addEventListener("click", () => {
       document
         .querySelectorAll(".nav-item[data-filter]")
-        .forEach((node) => node.classList.remove("active"));
+        .forEach((node) => {
+          node.classList.remove("active");
+          node.removeAttribute("aria-current");
+        });
       button.classList.add("active");
+      button.setAttribute("aria-current", "page");
 
       const filter = button.dataset["filter"];
       state.filter = filter === "unread" ? "unread" : "all";
       el<HTMLElement>("#list-title").textContent =
         state.filter === "unread" ? "未读邮件" : "全部邮件";
 
-      el<HTMLElement>("#sidebar").classList.remove("open");
+      setSidebarOpen(false);
+      detailRequest += 1;
       state.selectedId = null;
       state.detail = null;
-      document.querySelector("#detail-pane")?.replaceChildren();
-      el<HTMLElement>("#app-view").classList.remove("showing");
-      void loadList({ reset: true });
+      renderDetailEmpty();
+      closeDetail();
+      void loadList({ reset: true }).catch((error: unknown) => toast(errorMessage(error)));
     });
   });
 
@@ -440,14 +494,20 @@ function bindEvents(): void {
     void markAllRead();
   });
 
-  el<HTMLElement>("#refresh").addEventListener("click", () => {
+  el<HTMLButtonElement>("#refresh").addEventListener("click", (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
     void (async () => {
+      button.disabled = true;
+      button.classList.add("is-spinning");
       try {
         await loadList({ reset: true });
         toast("已刷新");
         if (state.selectedId !== null) await openEmail(state.selectedId);
       } catch (error) {
         toast(errorMessage(error));
+      } finally {
+        button.disabled = false;
+        button.classList.remove("is-spinning");
       }
     })();
   });
@@ -463,32 +523,40 @@ function bindEvents(): void {
   });
 
   el<HTMLElement>("#toggle-sidebar").addEventListener("click", () => {
-    el<HTMLElement>("#sidebar").classList.toggle("open");
+    setSidebarOpen(!el<HTMLElement>("#sidebar").classList.contains("open"));
   });
+  el<HTMLElement>("#sidebar-backdrop").addEventListener("click", () => setSidebarOpen(false));
+  window.matchMedia("(max-width: 860px)").addEventListener("change", () => setSidebarOpen(false));
 
   document.addEventListener("keydown", (event) => {
     // `/` 聚焦搜索（输入框里按 `/` 不应触发）。
     if (
       event.key === "/" &&
-      document.activeElement !== el<HTMLElement>("#search") &&
-      !el<HTMLElement>("#app-view").hidden
+      !(document.activeElement instanceof HTMLInputElement) &&
+      !(document.activeElement instanceof HTMLTextAreaElement) &&
+      !el<HTMLElement>("#app-view").hidden &&
+      !settings.isOpen()
     ) {
       event.preventDefault();
       el<HTMLInputElement>("#search").focus();
     }
     if (event.key === "Escape") {
       if (settings.isOpen()) {
-        el<HTMLElement>("#settings-view").hidden = true;
+        settings.close();
         return;
       }
-      el<HTMLElement>("#app-view").classList.remove("showing");
+      if (el<HTMLElement>("#sidebar").classList.contains("open")) {
+        setSidebarOpen(false);
+        return;
+      }
+      closeDetail();
     }
   });
 
   // 从后台切回来时立刻刷新，而不是等下一个 60 秒周期。
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && api.getToken()) {
-      void loadList({ reset: true });
+      void loadList({ reset: true }).catch((error: unknown) => toast(errorMessage(error)));
     }
   });
 }
@@ -498,6 +566,7 @@ function bindEvents(): void {
 // ===========================================================================
 
 async function boot(): Promise<void> {
+  mountIcons();
   bindEvents();
 
   if (api.getToken()) {

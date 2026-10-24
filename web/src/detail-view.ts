@@ -7,6 +7,7 @@
 
 import type { EmailDetail } from "./api-types.ts";
 import { create, formatSize, isMobile } from "./dom.ts";
+import { icon } from "./icons.ts";
 import { buildSrcdoc, hasRemoteImages, htmlToText } from "./mail-render.ts";
 import type { AppState } from "./state.ts";
 import { emptyState } from "./ui.ts";
@@ -31,8 +32,9 @@ export function renderDetailLoading(): void {
 
   const head = create("div", { className: "detail-head" });
   head.append(
-    create("div", { className: "skeleton", style: "height:20px;width:60%;margin-bottom:10px" }),
-    create("div", { className: "skeleton", style: "height:12px;width:35%" }),
+    create("div", { className: "skeleton", style: "height:23px;width:60%;margin-bottom:20px" }),
+    create("div", { className: "skeleton", style: "height:12px;width:75%;margin-bottom:9px" }),
+    create("div", { className: "skeleton", style: "height:12px;width:55%" }),
   );
 
   const body = create("div", { className: "body-wrap" });
@@ -45,7 +47,7 @@ export function renderDetailLoading(): void {
 export function renderDetailError(message: string): void {
   const pane = document.querySelector<HTMLElement>("#detail-pane");
   if (!pane) return;
-  pane.replaceChildren(emptyState(message || "加载失败"));
+  pane.replaceChildren(emptyState("邮件加载失败", message || "请稍后重试"));
 }
 
 /** 渲染详情头部（主题、元信息、操作按钮）。 */
@@ -55,76 +57,49 @@ export function renderDetail(state: AppState, handlers: DetailHandlers): void {
   if (!detail || !pane) return;
 
   const head = create("div", { className: "detail-head" });
-  head.append(create("h1", { className: "detail-subject", textContent: detail.subject || "(无主题)" }));
+  const top = create("div", { className: "detail-top" });
+  top.append(
+    create("h1", { className: "detail-subject", textContent: detail.subject || "(无主题)" }),
+    buildActions(detail, handlers),
+  );
+  head.append(top);
 
-  const meta = create("div", { className: "meta-line" });
+  const meta = create("dl", { className: "meta-line" });
   const addMeta = (label: string, value: string): void => {
     if (!value) return;
-    const span = create("span");
-    span.append(create("b", { textContent: label }), document.createTextNode(` ${value}`));
-    meta.append(span);
+    meta.append(create("dt", { textContent: label }), create("dd", { textContent: value }));
   };
   addMeta("发件人", detail.sender);
   addMeta("收件人", detail.recipient);
-  addMeta("时间", new Date(detail.created_at).toLocaleString());
-  head.append(meta);
+  const metaWrap = create("div", { className: "detail-meta" });
+  metaWrap.append(meta);
+  head.append(metaWrap);
+  head.append(create("div", {
+    className: "meta-time",
+    textContent: new Date(detail.created_at).toLocaleString("zh-CN", { hour12: false }),
+  }));
 
-  head.append(buildActions(detail, state.activeTab, handlers));
   pane.replaceChildren(head);
   renderDetailBody(state, handlers);
 }
 
 /** 操作按钮组。 */
-function buildActions(
-  detail: EmailDetail,
-  activeTab: "html" | "text",
-  handlers: DetailHandlers,
-): HTMLElement {
+function buildActions(detail: EmailDetail, handlers: DetailHandlers): HTMLElement {
   const actions = create("div", { className: "detail-actions" });
 
-  if (detail.text_body || detail.html_body) {
-    const htmlBtn = create("button", { className: "btn sm", type: "button", textContent: "HTML" });
-    const textBtn = create("button", { className: "btn sm", type: "button", textContent: "纯文本" });
+  const back = create("button", { className: "btn sm ghost detail-back", type: "button", textContent: "返回" });
+  back.prepend(icon("back"));
+  back.addEventListener("click", leaveDetail);
+  actions.append(back);
 
-    const sync = (): void => {
-      htmlBtn.classList.toggle("primary", activeTab === "html");
-      textBtn.classList.toggle("primary", activeTab === "text");
-    };
-    sync();
-
-    htmlBtn.addEventListener("click", () => handlers.onTabChange("html"));
-    textBtn.addEventListener("click", () => handlers.onTabChange("text"));
-    actions.append(htmlBtn, textBtn);
-  }
-
-  if (detail.message_id) {
-    const messageId = detail.message_id;
-    const copyBtn = create("button", {
-      className: "btn sm ghost",
-      type: "button",
-      textContent: "复制 Message-ID",
-    });
-    copyBtn.addEventListener("click", () => handlers.onCopyMessageId(messageId));
-    actions.append(copyBtn);
-  }
-
-  // 打开详情时后端已自动标为已读，所以这里提供「标回未读」的入口。
-  const unreadBtn = create("button", {
-    className: "btn sm",
-    type: "button",
-    textContent: "标为未读",
-  });
+  const unreadBtn = create("button", { className: "btn sm", type: "button", textContent: "标为未读", title: "标为未读" });
+  unreadBtn.prepend(icon("mail"));
   unreadBtn.addEventListener("click", () => handlers.onMarkUnread(detail.id));
-  actions.append(unreadBtn);
 
-  const deleteBtn = create("button", {
-    className: "btn sm danger",
-    type: "button",
-    textContent: "删除",
-  });
+  const deleteBtn = create("button", { className: "btn sm danger", type: "button", textContent: "删除", title: "删除邮件" });
+  deleteBtn.prepend(icon("trash"));
   deleteBtn.addEventListener("click", () => handlers.onDelete(detail.id));
-  actions.append(deleteBtn);
-
+  actions.append(unreadBtn, deleteBtn);
   return actions;
 }
 
@@ -137,10 +112,48 @@ export function renderDetailBody(state: AppState, handlers: DetailHandlers): voi
   // 只替换 body-wrap，保留头部，避免切换 tab 时头部闪一下。
   pane.querySelectorAll(".body-wrap").forEach((node) => node.remove());
 
+  // 只有纯文本时，选中态也必须落在纯文本上。
+  const activeTab = detail.html_body ? state.activeTab : "text";
   const wrap = create("div", { className: "body-wrap" });
+  wrap.append(buildBodyToolbar(detail, activeTab, handlers));
   wrap.append(buildBody(state, handlers));
   wrap.append(...buildAttachments(detail));
   pane.append(wrap);
+}
+
+/** 正文格式切换与辅助操作，和邮件操作分开，减少头部按钮数量。 */
+function buildBodyToolbar(
+  detail: EmailDetail,
+  activeTab: "html" | "text",
+  handlers: DetailHandlers,
+): HTMLElement {
+  const bar = create("div", { className: "body-toolbar" });
+  if (detail.text_body || detail.html_body) {
+    const tabs = create("div", { className: "tabs", role: "tablist", ariaLabel: "正文格式" });
+    for (const [tab, label, iconName] of [["html", "HTML", "code"], ["text", "纯文本", "type"]] as const) {
+      const button = create("button", {
+        className: `tab${activeTab === tab ? " active" : ""}`,
+        type: "button",
+        role: "tab",
+      });
+      button.setAttribute("aria-selected", String(activeTab === tab));
+      button.textContent = label;
+      button.prepend(icon(iconName));
+      button.addEventListener("click", () => {
+        if (activeTab !== tab) handlers.onTabChange(tab);
+      });
+      tabs.append(button);
+    }
+    bar.append(tabs);
+  }
+  if (detail.message_id) {
+    const messageId = detail.message_id;
+    const copy = create("button", { className: "btn sm ghost", type: "button", textContent: "复制 Message-ID", title: messageId });
+    copy.prepend(icon("copy"));
+    copy.addEventListener("click", () => handlers.onCopyMessageId(messageId));
+    bar.append(copy);
+  }
+  return bar;
 }
 
 /** 正文区域。 */
@@ -168,7 +181,7 @@ function buildBody(state: AppState, handlers: DetailHandlers): HTMLElement {
     return box;
   }
 
-  box.append(create("div", { className: "empty", textContent: "这封邮件没有正文" }));
+  box.append(emptyState("没有正文", "这封邮件只包含附件或正文为空"));
   return box;
 }
 
@@ -176,7 +189,11 @@ function buildBody(state: AppState, handlers: DetailHandlers): HTMLElement {
 function buildImageBar(handlers: DetailHandlers): HTMLElement {
   const bar = create("div", { className: "imgbar" });
   bar.append(
-    create("span", { textContent: "🛡️ 已阻止远程图片，避免向发件人泄露你的 IP" }),
+    (() => {
+      const text = create("span", { textContent: "已阻止远程图片，避免泄露你的 IP" });
+      text.prepend(icon("shield"));
+      return text;
+    })(),
   );
   const button = create("button", {
     className: "btn sm",
@@ -226,27 +243,33 @@ function buildAttachments(detail: EmailDetail): HTMLElement[] {
   if (files.length === 0) return [];
 
   const urlByIndex = new Map(detail.attachment_urls.map((entry) => [entry.index, entry.url]));
-  const list = create("div", { className: "attachments" });
+  const section = create("section", { className: "attachments", ariaLabel: "邮件附件" });
+  const heading = create("h2", { className: "section-label", textContent: `附件 · ${files.length}` });
+  heading.prepend(icon("paperclip"));
+  const list = create("div", { className: "attachment-list" });
+  section.append(heading, list);
 
   for (const file of files) {
     const url = urlByIndex.get(file.index);
     const node = create("div", { className: `att${url ? "" : " missing"}` });
     const name = file.filename || "附件";
-
+    const info = create("div", { className: "att-info" });
+    info.append(
+      create("span", { className: "name", textContent: name, title: name }),
+      create("span", { className: "size", textContent: `${formatSize(file.size)}${url ? "" : " · 未保存"}` }),
+    );
+    node.append(icon("paperclip"));
     if (url) {
-      const link = create("a", { href: url });
+      const link = create("a", { href: url, title: `下载 ${name}` });
       link.setAttribute("download", name);
-      link.append(create("span", { className: "name", textContent: name }));
+      link.append(info);
       node.append(link);
     } else {
-      node.append(create("span", { className: "name", textContent: name }));
-      node.append(create("span", { className: "size", textContent: "未保存" }));
+      node.append(info);
     }
-    node.append(create("span", { className: "size", textContent: formatSize(file.size) }));
     list.append(node);
   }
-
-  return [list];
+  return [section];
 }
 
 /** 移动端返回列表。 */
