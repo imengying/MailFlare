@@ -225,7 +225,7 @@
   main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: radial-gradient(800px 420px at 100% 0, var(--accent-wash), transparent 70%), var(--bg); }
   .toolbar { display: flex; align-items: center; gap: 10px; min-height: 68px; padding: 14px 20px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--surface) 90%, transparent); backdrop-filter: blur(16px); flex-shrink: 0; }
   .toolbar-heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
-  .toolbar .title { margin: 0; font-weight: 650; font-size: 17px; letter-spacing: -.25px; white-space: nowrap; }
+  .toolbar .title { margin: 0; font-weight: 650; font-size: 17px; line-height: 1.3; letter-spacing: -.25px; white-space: nowrap; }
   .list-count { color: var(--text-dim); background: var(--surface-3); padding: 2px 7px; border-radius: 99px; font-size: 11px; line-height: 18px; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .list-count:empty { display: none; }
   .search { position: relative; flex: 0 1 260px; min-width: 130px; }
@@ -314,10 +314,9 @@
 
   #settings-view { position: relative; overflow: hidden; display: flex; flex-direction: column; background: var(--bg); }
   .settings-form { position: relative; width: min(1440px, 100%); height: 100%; min-height: 0; margin: 0 auto; display: flex; flex-direction: column; }
-  .settings-head { display: flex; align-items: center; gap: 12px; padding: 28px 36px 22px; flex-shrink: 0; }
+  .settings-head { display: flex; align-items: center; gap: 12px; min-height: 68px; padding: 14px 36px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--surface) 90%, transparent); backdrop-filter: blur(16px); flex-shrink: 0; }
   .settings-heading { flex: 1; min-width: 0; }
-  .settings-heading h2 { margin: 0; font-size: 23px; line-height: 1.3; letter-spacing: -.5px; }
-  .settings-heading p { margin: 5px 0 0; color: var(--text-faint); font-size: 12.5px; }
+  .settings-heading h2 { margin: 0; font-size: 17px; line-height: 1.3; font-weight: 650; letter-spacing: -.25px; }
   .settings-menu { display: none; flex-shrink: 0; }
   .settings-error { margin: 0 36px 16px; padding: 10px 12px; border-radius: 9px; background: var(--danger-soft); flex-shrink: 0; }
   .settings-error:empty { display: none; }
@@ -396,7 +395,7 @@
     #app-view.settings-open #settings-view { display: flex; }
     .toolbar { min-height: 64px; padding: 11px 14px; gap: 8px; }
     .toolbar-heading { display: flex; align-items: baseline; gap: 8px; }
-    .toolbar .title { font-size: 16px; }
+    .toolbar .title { font-size: 16px; line-height: 1.3; }
     .search { flex: 0 1 210px; }
     .mail-item { grid-template-columns: 34px minmax(0, 1fr); gap: 10px; padding: 15px 16px; }
     .mail-avatar { width: 34px; height: 34px; border-radius: 10px; }
@@ -434,9 +433,8 @@
     .body-toolbar { margin-inline: 4px; }
     .attachment-list { grid-template-columns: 1fr; }
     .imgbar button { margin-left: 0; }
-    .settings-head { align-items: center; padding: 18px 16px 15px; }
-    .settings-heading h2 { font-size: 20px; }
-    .settings-heading p { display: none; }
+    .settings-head { min-height: 64px; padding: 11px 16px; }
+    .settings-heading h2 { font-size: 16px; }
     .settings-menu { display: inline-flex; }
     .settings-error { margin: 0 16px 14px; }
     .settings-content { gap: 12px; padding: 0 12px 96px; }
@@ -547,7 +545,6 @@
             <button class="btn icon-btn ghost settings-menu" type="button" id="settings-menu" aria-label="打开导航" aria-controls="sidebar"><span data-icon="menu"></span></button>
             <div class="settings-heading">
               <h2 id="settings-title" tabindex="-1">设置</h2>
-              <p>管理你的邮箱、外观与通知</p>
             </div>
           </header>
           <p class="err settings-error" id="settings-err" role="alert"></p>
