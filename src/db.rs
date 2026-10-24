@@ -169,11 +169,11 @@ fn collapse_whitespace(s: &str) -> String {
     out.trim_end().to_string()
 }
 
-/// 极简 HTML 去标签，只用于列表预览（不追求语义正确）。
+/// 极简 HTML 去标签（不追求语义正确）。
 ///
 /// 特点是**单遍扫描、不分配中间字符串**：遇到 `<` 跳到下一个 `>`；顺带把
 /// `<style>`/`<script>` 的内容整段丢掉，避免预览里出现一堆 CSS。
-fn strip_html_preview(html: &str) -> String {
+pub fn strip_html_preview(html: &str) -> String {
     let mut out = String::with_capacity(html.len().min(512));
     let bytes = html.as_bytes();
     let mut i = 0usize;
@@ -208,12 +208,6 @@ fn strip_html_preview(html: &str) -> String {
     }
 
     collapse_whitespace(&out)
-}
-
-/// 仅供测试：让单元测试能直接验证 HTML 去标签逻辑（私有函数不便导出）。
-#[cfg(test)]
-pub fn strip_html_preview_for_test(html: &str) -> String {
-    strip_html_preview(html)
 }
 
 /// 插入邮件；返回 `true` 表示确实是新邮件（`false` 说明 message_id 重复被忽略）。

@@ -324,7 +324,7 @@ mod unit {
     fn strip_html_preview_removes_tags_and_scripts() {
         let html = "<html><head><style>body{color:red}</style></head>\
                     <body><p>第一段</p><script>alert(1)</script>\n\n<p>第二段</p></body></html>";
-        let out = crate::db::strip_html_preview_for_test(html);
+        let out = crate::db::strip_html_preview(html);
         assert!(!out.contains('<'), "不应残留标签：{out}");
         assert!(!out.contains("alert"), "脚本内容应被丢弃：{out}");
         assert!(!out.contains("color:red"), "样式内容应被丢弃：{out}");

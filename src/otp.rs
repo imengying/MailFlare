@@ -22,6 +22,8 @@ pub struct Code {
 /// 顺序有意义：越具体的越靠前，命中即返回。
 const KEYWORDS: &[(&str, &str)] = &[
     ("verification code", "验证码"),
+    ("confirmation code", "验证码"),
+    ("confirmation number", "验证码"),
     ("security code", "安全码"),
     // 单独的 `code` 很常见（Apple ID Code、login code），但泛用性最强，
     // 所以放在靠后位置，先让更具体的关键词命中。
@@ -43,9 +45,14 @@ const KEYWORDS: &[(&str, &str)] = &[
 /// 从邮件里提取验证码；没有可信结果时返回 `None`。
 ///
 /// 优先看主题（邮件客户端通常把验证码放在主题里），再看正文前若干字符。
+///
+/// 正文可能是 HTML：调用方无法可靠区分，所以这里统一做一次「去标签」。
+/// 验证码常被 `<div>` 之类的标签包着，不去标签会让关键词和数字被标签隔开。
 pub fn extract(subject: &str, body: &str) -> Option<Code> {
+    // 去标签后再截断：先截断可能把标签截成半截，反而更难处理。
+    let plain = crate::db::strip_html_preview(body);
     // 正文只看前 2000 字符：验证码总在开头，没必要扫完整封长邮件。
-    let head: String = body.chars().take(2000).collect();
+    let head: String = plain.chars().take(2000).collect();
 
     for text in [subject, head.as_str()] {
         for (keyword, label) in KEYWORDS {
@@ -59,26 +66,46 @@ pub fn extract(subject: &str, body: &str) -> Option<Code> {
 
 /// 在关键词附近找一个像验证码的串。
 ///
-/// 关键词后面 40 个字符内优先；找不到再放宽到前面 20 个字符
-/// （「123456 是您的验证码」这种句式）。
+/// 取窗口内**距离关键词最近**的候选，而不是固定「先看后面再看前面」：
+/// `BFM-GXB xAI confirmation code` 这种验证码在前、关键词在后的写法很常见，
+/// 固定顺序会先撞上后面的无关数字。
 fn find_near(text: &str, keyword: &str) -> Option<String> {
     let lower = text.to_ascii_lowercase();
+    // 关键词前后的搜索窗口。真实邮件常写成
+    // 「Please use the code below to validate your email address. BFM-GXB」，
+    // 关键词与验证码之间隔着半句话，窗口太窄会漏；命中时按距离取最近的一个，
+    // 所以放宽窗口不会明显增加误报。
+    const WINDOW_BEFORE: usize = 80;
+    const WINDOW_AFTER: usize = 120;
+
+    let mut best: Option<(usize, String)> = None;
     let mut from = 0;
     while let Some(pos) = lower[from..].find(keyword) {
         let at = from + pos;
         let after = at + keyword.len();
 
-        // 关键词之后的 40 个字符。
-        let tail: String = text[after..].chars().take(40).collect();
-        if let Some(code) = take_code(&tail) {
-            return Some(code);
+        // 关键词之前：越靠近关键词的候选越优先。
+        let start = text[..at]
+            .char_indices()
+            .rev()
+            .nth(WINDOW_BEFORE)
+            .map_or(0, |(i, _)| i);
+        let head = &text[start..at];
+        for (offset, code) in candidates(head) {
+            // 距离 = 候选结束位置到关键词的距离（head 内越靠后越近）。
+            let distance = head.len() - offset;
+            if best.as_ref().is_none_or(|(d, _)| distance < *d) {
+                best = Some((distance, code));
+            }
         }
 
-        // 关键词之前的 20 个字符。
-        let start = text[..at].char_indices().rev().nth(20).map_or(0, |(i, _)| i);
-        let head = &text[start..at];
-        if let Some(code) = take_code(head) {
-            return Some(code);
+        // 关键词之后。
+        let tail: String = text[after..].chars().take(WINDOW_AFTER).collect();
+        for (offset, code) in candidates(&tail) {
+            let distance = offset;
+            if best.as_ref().is_none_or(|(d, _)| distance < *d) {
+                best = Some((distance, code));
+            }
         }
 
         from = after;
@@ -86,63 +113,79 @@ fn find_near(text: &str, keyword: &str) -> Option<String> {
             break;
         }
     }
-    None
+    best.map(|(_, code)| code)
 }
 
-/// 从一段文本里取出第一个形似验证码的 token。
-///
-/// 规则：
-/// - 长度 4–8；
-/// - 全是数字，或全是大写字母加数字（且至少含一个数字）；
-/// - 前后不能紧贴数字/字母，避免截断 `订单2024001` 这种长数字串；
-/// - 排除年份、金额这类明显不是验证码的形态。
-fn take_code(text: &str) -> Option<String> {
-    let bytes: Vec<char> = text.chars().collect();
+/// 列出文本中所有形似验证码的候选，附带其在文本中的起始偏移。
+fn candidates(text: &str) -> Vec<(usize, String)> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
     let mut i = 0;
-    while i < bytes.len() {
-        if !bytes[i].is_ascii_alphanumeric() {
+
+    while i < chars.len() {
+        if !chars[i].is_ascii_alphanumeric() {
             i += 1;
             continue;
         }
         let start = i;
-        while i < bytes.len() && bytes[i].is_ascii_alphanumeric() {
+        // 允许内部的连字符：`BFM-GXB`、`123-456` 这类分组码很常见。
+        // 连字符必须夹在两个字母数字之间，不能收尾。
+        while i < chars.len() {
+            let boundary_dash = chars[i] == '-'
+                && i > start
+                && i + 1 < chars.len()
+                && chars[i + 1].is_ascii_alphanumeric();
+            if !chars[i].is_ascii_alphanumeric() && !boundary_dash {
+                break;
+            }
             i += 1;
         }
-        let token: String = bytes[start..i].iter().collect();
 
-        // 前后必须是非字母数字（当前 token 已经按此切分，这里再挡一次
-        // 字母数字混排被下划线衔接的情况）。
-        let prev = if start == 0 { None } else { Some(bytes[start - 1]) };
-        if matches!(prev, Some('_')) {
+        let token: String = chars[start..i].iter().collect();
+        // 紧贴字母数字的 token 会被切分，这里再挡一次下划线衔接。
+        if start > 0 && chars[start - 1] == '_' {
             continue;
         }
-
         if is_code_like(&token) {
-            return Some(token);
+            out.push((start, token));
         }
     }
-    None
+    out
 }
 
 /// 判断一个 token 是否像验证码。
 fn is_code_like(token: &str) -> bool {
-    let len = token.len();
+    // 去掉分组连字符后再评估长度与字符集。
+    let compact: String = token.chars().filter(|c| *c != '-').collect();
+    let len = compact.chars().count();
     if !(4..=8).contains(&len) {
         return false;
     }
 
-    let all_digits = token.chars().all(|c| c.is_ascii_digit());
+    let all_digits = compact.chars().all(|c| c.is_ascii_digit());
     if all_digits {
         // 4 位数字太容易是年份、金额、端口，不猜。
         return len != 4;
     }
 
-    // 字母数字混合：只接受全大写（或数字）+ 至少一位数字。
-    let has_digit = token.chars().any(|c| c.is_ascii_digit());
-    let upper_ok = token
+    // 字母数字混合：全大写（或数字）。
+    let has_alpha = compact.chars().any(|c| c.is_ascii_uppercase());
+    let has_digit = compact.chars().any(|c| c.is_ascii_digit());
+    let upper_ok = compact
         .chars()
         .all(|c| c.is_ascii_digit() || c.is_ascii_uppercase());
-    has_digit && upper_ok
+    if !upper_ok || !has_alpha {
+        return false;
+    }
+
+    // 含数字：`A1B2C3`、`XYZ789` 这类基本可信。
+    if has_digit {
+        return true;
+    }
+
+    // 纯字母：只有带分组连字符时才接受（`BFM-GXB`）。
+    // 否则 `THANKS`、`PLEASE`、`VERIFY` 这些普通单词会被误判成验证码。
+    compact.len() != token.chars().count()
 }
 
 #[cfg(test)]
@@ -224,6 +267,85 @@ mod tests {
         assert!(extract("验证码 2024", "").is_none());
         // 6 位仍然正常。
         assert_eq!(extract("验证码 202400", "").unwrap().value, "202400");
+    }
+
+    #[test]
+    fn extracts_from_html_body() {
+        // 真实 HTML 邮件：验证码被 <div> 包着，标签会把关键词和数字隔开。
+        let html = r#"<h2>登录邮箱验证码</h2>
+        <p style="color:#4b5563">请使用以下验证码完成验证。</p>
+        <div style="font-size:32px;font-weight:bold;letter-spacing:8px">949746</div>
+        <div>有效期：3 分钟</div>"#;
+        let c = extract("登录验证码", html).expect("HTML 正文里应能提取");
+        assert_eq!(c.value, "949746");
+    }
+
+    #[test]
+    fn ignores_html_style_and_script() {
+        // CSS 里的数字（字号、颜色值）不能被当成验证码。
+        let html = r#"<style>.a{font-size:32px;color:#111827;letter-spacing:8px}</style>
+        <p>验证码</p><div>123456</div>"#;
+        let c = extract("", html).expect("应提取正文里的验证码");
+        assert_eq!(c.value, "123456");
+    }
+
+
+    #[test]
+    fn real_nediya_email_after_parse() {
+        // 用户提供的原始 eml：text/html + quoted-printable，走完整解析链路。
+        let raw = include_bytes!("../tests/fixtures/nediya.eml");
+        let parsed = crate::mail::parse(raw, 256 * 1024).expect("eml 应能解析");
+
+        println!("subject   = {:?}", parsed.subject);
+        println!("text_body = {:?}", parsed.text_body);
+        println!("html 前 200 = {:?}", &parsed.html_body[..parsed.html_body.len().min(200)]);
+
+        // 推送侧优先用 text_body，没有才退回 html_body——两种都要能提取。
+        let from_text = extract(&parsed.subject, &parsed.text_body).expect("纯文本路径应能提取");
+        assert_eq!(from_text.value, "949746");
+
+        let c = extract(&parsed.subject, &parsed.html_body).expect("应提取到验证码");
+        assert_eq!(c.value, "949746");
+        assert_eq!(c.label, "验证码");
+    }
+
+    #[test]
+    fn real_xai_email_with_hyphenated_code() {
+        // 验证码是带连字符、纯字母的 `BFM-GXB`，且关键词在后面。
+        let raw = include_bytes!("../tests/fixtures/xai.eml");
+        let parsed = crate::mail::parse(raw, 256 * 1024).expect("eml 应能解析");
+
+        assert_eq!(parsed.subject, "BFM-GXB xAI confirmation code");
+        assert!(parsed.text_body.contains("BFM-GXB"), "纯文本应含验证码");
+
+        let from_text = extract(&parsed.subject, &parsed.text_body).expect("应提取到验证码");
+        assert_eq!(from_text.value, "BFM-GXB");
+    }
+
+    #[test]
+    fn finds_grouped_numeric_code() {
+        assert_eq!(extract("验证码：123-456", "").unwrap().value, "123-456");
+    }
+
+    #[test]
+    fn wider_window_does_not_create_false_positives() {
+        // 窗口放宽后，句子里的普通大写词不能被当成验证码。
+        assert!(extract("Your order has been SHIPPED and will arrive soon", "").is_none());
+        assert!(extract("验证码邮件发送失败，请稍后再试", "").is_none());
+        assert!(extract("confirmation code: CONFIRMED", "").is_none());
+        // 常见英文词是纯字母 5-8 位，不能被误判成验证码。
+        for word in ["THANKS", "PLEASE", "VERIFY", "EMAILS", "LOGIN"] {
+            assert!(
+                extract(&format!("confirmation code: {word}"), "").is_none(),
+                "{word} 不应被识别为验证码"
+            );
+        }
+    }
+
+    #[test]
+    fn does_not_treat_short_words_as_codes() {
+        // 纯字母码要求至少 5 位，避免 OK / PDF 之类误报。
+        assert!(extract("confirmation code: OK", "").is_none());
     }
 
     #[test]
