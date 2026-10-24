@@ -74,6 +74,9 @@ pub struct Settings {
     pub telegram_bot_token: String,
     pub telegram_chat_id: String,
 
+    /// 从邮件中提取验证码并置顶显示。
+    pub otp_enabled: bool,
+
     // ---- Bark -----------------------------------------------------------
     pub bark_enabled: bool,
     pub bark_server: String,
@@ -118,6 +121,7 @@ impl Default for Settings {
             telegram_enabled: false,
             telegram_bot_token: String::new(),
             telegram_chat_id: String::new(),
+            otp_enabled: true,
             bark_enabled: false,
             bark_server: "https://api.day.app".to_string(),
             bark_device_key: String::new(),
@@ -215,6 +219,7 @@ impl Settings {
             telegram_bot_token_set: !self.telegram_bot_token.is_empty(),
             telegram_bot_token_hint: hint(&self.telegram_bot_token),
             telegram_chat_id: &self.telegram_chat_id,
+            otp_enabled: self.otp_enabled,
             bark_enabled: self.bark_enabled,
             bark_server: &self.bark_server,
             bark_device_key_set: !self.bark_device_key.is_empty(),
@@ -250,6 +255,7 @@ pub struct SettingsView<'a> {
     pub telegram_bot_token_set: bool,
     pub telegram_bot_token_hint: &'a str,
     pub telegram_chat_id: &'a str,
+    pub otp_enabled: bool,
     pub bark_enabled: bool,
     pub bark_server: &'a str,
     pub bark_device_key_set: bool,

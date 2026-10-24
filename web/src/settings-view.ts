@@ -141,6 +141,7 @@ export function createSettingsController(
     );
 
     check("#tg-enabled").checked = settings.telegram_enabled;
+    check("#otp-enabled").checked = settings.otp_enabled;
     text("#tg-chat").value = settings.telegram_chat_id;
     fillSecret(
       "#tg-token",
@@ -210,6 +211,7 @@ export function createSettingsController(
       public_url: text("#public-url").value.trim(),
       turnstile_site_key: text("#ts-site-key").value.trim(),
       telegram_enabled: check("#tg-enabled").checked,
+      otp_enabled: check("#otp-enabled").checked,
       telegram_chat_id: text("#tg-chat").value.trim(),
       bark_enabled: check("#bark-enabled").checked,
       bark_server: text("#bark-server").value.trim(),

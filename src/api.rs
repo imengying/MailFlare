@@ -706,6 +706,8 @@ struct SettingsPatch {
     telegram_bot_token: Option<String>,
     telegram_chat_id: Option<String>,
 
+    otp_enabled: Option<bool>,
+
     bark_enabled: Option<bool>,
     bark_server: Option<String>,
     bark_device_key: Option<String>,
@@ -751,7 +753,7 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
 
     // 布尔与数值：有值就覆盖。
     apply!(patch => settings;
-        telegram_enabled, bark_enabled,
+        telegram_enabled, otp_enabled, bark_enabled,
         max_body_bytes, max_message_bytes, max_attachment_bytes, r2_concurrency,
         page_size_default, page_size_max,
     );

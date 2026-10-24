@@ -12,6 +12,7 @@ mod inbound;
 mod jwt;
 mod mail;
 mod notify;
+mod otp;
 mod r2;
 mod s3sign;
 mod util;
