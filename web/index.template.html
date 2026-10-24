@@ -182,7 +182,6 @@
     box-shadow: 0 30px 85px -36px rgba(48, 47, 112, .4), 0 2px 8px rgba(24, 31, 56, .025);
     backdrop-filter: blur(20px);
   }
-  .login-card::before { content: ""; position: absolute; top: 0; left: 26%; right: 26%; height: 2px; border-radius: 0 0 3px 3px; background: var(--accent-gradient); opacity: .85; }
   .brand { display: flex; align-items: center; gap: 11px; min-width: 0; font-size: 18px; font-weight: 700; letter-spacing: -.4px; }
   .brand-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .brand .logo { width: 34px; height: 34px; flex: 0 0 auto; border-radius: 11px; display: grid; place-items: center; background: var(--accent-gradient); color: #fff; box-shadow: 0 7px 16px -8px var(--accent), inset 0 1px 0 rgba(255, 255, 255, .22); }
@@ -205,13 +204,17 @@
   #sidebar .brand .logo { width: 32px; height: 32px; border-radius: 10px; }
   .sidebar-label { margin: 0 9px 8px; color: var(--text-faint); font-size: 10px; font-weight: 650; letter-spacing: 1.4px; }
   .sidebar-nav { display: grid; gap: 4px; }
-  .nav-item { display: flex; align-items: center; gap: 10px; min-height: 41px; padding: 9px 10px; border-radius: 9px; border: 1px solid transparent; background: transparent; text-align: left; width: 100%; color: var(--text-dim); font-weight: 500; transition: background .15s, color .15s, border-color .15s, box-shadow .15s; }
+  .nav-item { position: relative; display: flex; align-items: center; gap: 10px; min-height: 41px; padding: 9px 10px; border-radius: 9px; border: none; background: transparent; text-align: left; width: 100%; color: var(--text-dim); font-weight: 500; transition: background .15s, color .15s; }
   .nav-item .icon { width: 18px; height: 18px; color: var(--text-faint); }
-  .nav-item:hover { background: var(--surface-2); border-color: var(--border); color: var(--text); }
+  .nav-item:hover { background: var(--surface-2); color: var(--text); }
   .nav-item:hover .icon { color: var(--text-dim); }
-  .nav-item.active { background: linear-gradient(110deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 48%, var(--surface))); border-color: color-mix(in srgb, var(--border) 50%, var(--accent)); color: var(--accent); font-weight: 600; box-shadow: 0 4px 12px -10px var(--accent); }
+  .nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .nav-item.active .icon { color: var(--accent); }
+  .nav-item.active::before { content: ""; position: absolute; left: -12px; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
+  .nav-item .count.quiet { background: var(--surface-3); color: var(--text-dim); }
+  .nav-item.active .count.quiet { background: var(--accent); color: var(--on-accent); }
   .nav-item .count { margin-left: auto; font-size: 10.5px; line-height: 18px; background: var(--accent); color: var(--on-accent); padding: 0 6px; border-radius: 99px; min-width: 20px; text-align: center; font-variant-numeric: tabular-nums; }
+  .nav-item.active .count { background: var(--accent); }
   #sidebar .spacer { flex: 1; min-height: 20px; }
   .sidebar-footer { display: grid; gap: 3px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
   #open-settings { margin-top: 0; }
@@ -233,7 +236,7 @@
   .menu-btn { display: none; }
 
   .split { display: grid; grid-template-columns: minmax(310px, 360px) minmax(0, 1fr); flex: 1; min-height: 0; }
-  .list-pane { border-right: 1px solid var(--border); overflow-y: auto; overscroll-behavior: contain; background: color-mix(in srgb, var(--surface) 94%, var(--bg)); min-height: 0; }
+  .list-pane { border-right: 1px solid var(--border-strong); overflow-y: auto; overscroll-behavior: contain; background: color-mix(in srgb, var(--surface) 94%, var(--bg)); min-height: 0; }
   .detail-pane, #settings-view { min-width: 0; min-height: 0; }
   .detail-pane { overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; }
   .mail-item { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 11px; width: 100%; text-align: left; border: none; background: transparent; padding: 16px 16px 15px; border-bottom: 1px solid var(--border); color: inherit; position: relative; transition: background .15s, box-shadow .15s; }
@@ -252,21 +255,26 @@
   .mail-item .snippet { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-faint); margin-top: 5px; min-width: 0; }
   .snippet-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .attachment-tag { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; padding: 1px 5px; border-radius: 5px; background: var(--surface-3); color: var(--text-dim); font-size: 10.5px; }
+  .mail-alias { display: inline-flex; align-items: center; gap: 3px; flex: 0 1 auto; min-width: 0; padding: 1px 6px; border-radius: 5px; background: var(--accent-wash); color: var(--accent); font-size: 10.5px; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mail-alias .alias-prefix { color: var(--text-faint); font-weight: 500; }
   .attachment-tag .icon { width: 11px; height: 11px; }
   .mail-item.unread .from, .mail-item.unread .subj { color: var(--text); font-weight: 650; }
   .unread-dot { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
   .mail-item:not(.unread) .unread-dot { visibility: hidden; }
   .load-more { width: calc(100% - 32px); margin: 16px; }
 
-  .empty { margin: auto; width: 100%; padding: 56px 28px; text-align: center; color: var(--text-dim); }
+  .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; margin: auto; width: 100%; min-height: 100%; padding: 32px 28px 56px; text-align: center; color: var(--text-dim); }
   .empty-icon { position: relative; display: grid; place-items: center; width: 66px; height: 66px; margin: 0 auto 19px; border-radius: 21px; color: var(--accent); background: linear-gradient(140deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 25%, var(--surface))); border: 1px solid color-mix(in srgb, var(--border) 55%, var(--accent)); box-shadow: 0 14px 28px -20px var(--accent); }
   .empty-icon::after { content: ""; position: absolute; inset: -8px; z-index: -1; border-radius: 26px; border: 1px solid var(--accent-ring); }
   .empty-icon .icon { width: 28px; height: 28px; }
   .empty h2 { margin: 0 0 7px; font-size: 17px; font-weight: 650; letter-spacing: -.2px; color: var(--text); }
   .empty p { max-width: 310px; margin: 0 auto; color: var(--text-faint); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
-  .list-pane > .empty { padding-top: 70px; }
-  .list-pane .empty-icon { width: 46px; height: 46px; border-radius: 14px; }
-  .list-pane .empty-icon .icon { width: 22px; height: 22px; }
+  .list-pane > .empty { min-height: 100%; padding: 32px 24px 56px; }
+  .list-pane .empty-icon { width: 66px; height: 66px; border-radius: 21px; }
+  .list-pane .empty-icon .icon { width: 28px; height: 28px; }
+  .shortcuts { display: flex; flex-wrap: wrap; justify-content: center; gap: 7px 16px; margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border); width: min(420px, 100%); }
+  .shortcut { display: inline-flex; align-items: center; gap: 6px; color: var(--text-faint); font-size: 11.5px; }
+  kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 5px; border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; background: var(--surface); color: var(--text-dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; line-height: 1; }
 
   .detail-head { padding: 24px 30px 20px; border-bottom: 1px solid var(--border); background: linear-gradient(110deg, var(--accent-wash), transparent 55%), var(--surface); }
   .detail-top { display: flex; align-items: flex-start; gap: 16px; }
@@ -507,10 +515,10 @@
     <nav class="sidebar-nav" aria-label="邮件筛选">
       <button class="nav-item active" data-filter="all" aria-current="page">
         <span data-icon="inbox"></span><span>全部邮件</span>
-        <span class="count" id="count-unread" hidden></span>
       </button>
       <button class="nav-item" data-filter="unread">
         <span data-icon="unread"></span><span>未读邮件</span>
+        <span class="count" id="count-unread-nav" hidden></span>
       </button>
     </nav>
     <div class="spacer"></div>
@@ -536,13 +544,7 @@
 
     <div class="split">
       <div class="list-pane" id="list-pane"></div>
-      <div class="detail-pane" id="detail-pane">
-        <div class="empty welcome-empty">
-          <div class="empty-icon"><span data-icon="mail"></span></div>
-          <h2>选择一封邮件</h2>
-          <p>在左侧选择邮件，即可阅读正文与管理附件</p>
-        </div>
-      </div>
+      <div class="detail-pane" id="detail-pane"></div>
       <section id="settings-view" aria-labelledby="settings-title" hidden>
         <form class="settings-form" id="settings-form">
           <header class="settings-head">

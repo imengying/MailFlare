@@ -41,6 +41,8 @@ fn default_true() -> bool {
 pub struct EmailSummary {
     pub id: String,
     pub sender: String,
+    /// 收件地址。Catch-All 场景下靠它区分别名，列表里只展示 `@` 前缀。
+    pub recipient: String,
     pub subject: String,
     /// 由正文截取的前若干字符，列表里做预览。
     pub preview: String,
@@ -97,6 +99,8 @@ struct SummaryRow {
     id: String,
     #[serde(default)]
     sender: Option<String>,
+    #[serde(default)]
+    recipient: Option<String>,
     #[serde(default)]
     subject: Option<String>,
     #[serde(default)]
@@ -281,7 +285,7 @@ pub async fn list_emails(
     // `preview_is_html` 标记，好在 Rust 侧决定要不要去标签）。
     // substr 在 SQLite 里按字符计数，中文不会被切坏。
     let mut sql = String::from(
-        "SELECT id, sender, subject, \
+        "SELECT id, sender, recipient, subject, \
          substr(COALESCE(NULLIF(text_body, ''), html_body, ''), 1, 240) AS preview, \
          CASE WHEN COALESCE(text_body, '') = '' THEN 1 ELSE 0 END AS preview_is_html, \
          is_read, created_at, attachments \
@@ -368,6 +372,7 @@ pub async fn list_emails(
                 attachment_count: file_count,
                 id: r.id,
                 sender: r.sender.unwrap_or_default(),
+                recipient: r.recipient.unwrap_or_default(),
                 subject: r.subject.unwrap_or_else(|| "(无主题)".to_string()),
                 preview,
                 is_read: r.is_read.unwrap_or(0) != 0,

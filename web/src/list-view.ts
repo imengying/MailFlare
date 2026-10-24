@@ -31,9 +31,9 @@ export function visibleItems(state: AppState): EmailSummary[] {
   );
 }
 
-/** 更新侧边栏未读角标。独立出来，因为「标为已读」时不需要重绘整个列表。 */
+/** 更新侧边栏「未读邮件」角标。标为已读时单独调用，不必重绘整个列表。 */
 export function renderUnreadBadge(state: AppState): void {
-  const badge = el<HTMLElement>("#count-unread");
+  const badge = el<HTMLElement>("#count-unread-nav");
   if (state.unread > 0) {
     badge.hidden = false;
     badge.textContent = state.unread > 99 ? "99+" : String(state.unread);
@@ -91,6 +91,13 @@ export function renderList(state: AppState, handlers: ListHandlers): void {
   pane.replaceChildren(frag);
 }
 
+/** 取收件地址 `@` 之前的部分；没有别名可省时返回空串。 */
+function recipientAlias(recipient: string): string {
+  const at = recipient.lastIndexOf("@");
+  if (at <= 0) return "";
+  return recipient.slice(0, at);
+}
+
 /** 单行邮件。 */
 function buildRow(item: EmailSummary, selected: boolean, onOpen: (id: string) => void): HTMLElement {
   const row = create("button", {
@@ -127,6 +134,12 @@ function buildRow(item: EmailSummary, selected: boolean, onOpen: (id: string) =>
     className: "snippet-text",
     textContent: item.preview.replace(/\s+/g, " ").trim().slice(0, 120) || "暂无正文预览",
   }));
+  const alias = recipientAlias(item.recipient);
+  if (alias) {
+    const to = create("span", { className: "mail-alias", title: `收件地址：${item.recipient}` });
+    to.append(create("span", { className: "alias-prefix", textContent: "to:" }), document.createTextNode(alias));
+    snippet.append(to);
+  }
   if (item.attachment_count > 0) {
     const tag = create("span", { className: "attachment-tag", title: `${item.attachment_count} 个附件` });
     tag.append(icon("paperclip"), document.createTextNode(String(item.attachment_count)));

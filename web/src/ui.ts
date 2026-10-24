@@ -43,11 +43,29 @@ export function skeletonRows(count: number): HTMLElement[] {
   });
 }
 
+/** 正文区的快捷键提示，只在没有选中邮件时出现。 */
+function shortcutHint(): HTMLElement {
+  const list = create("div", { className: "shortcuts" });
+  const rows: Array<[string[], string]> = [
+    [["/"], "搜索"],
+    [["J", "K"], "切换邮件"],
+    [["R"], "刷新"],
+    [["Del"], "删除"],
+  ];
+  for (const [keys, label] of rows) {
+    const item = create("span", { className: "shortcut" });
+    for (const key of keys) item.append(create("kbd", { textContent: key }));
+    item.append(document.createTextNode(label));
+    list.append(item);
+  }
+  return list;
+}
+
 /** 主界面初次进入或删除当前邮件后的统一占位。 */
 export function renderDetailEmpty(): void {
-  el<HTMLElement>("#detail-pane").replaceChildren(
-    emptyState("选择一封邮件", "在左侧选择邮件，即可阅读正文与管理附件"),
-  );
+  const box = emptyState("选择一封邮件", "在左侧选择邮件，即可阅读正文与管理附件");
+  box.append(shortcutHint());
+  el<HTMLElement>("#detail-pane").replaceChildren(box);
 }
 
 /** 危险操作确认框；原生 dialog 提供焦点约束与 Esc 支持。 */

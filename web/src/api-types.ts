@@ -40,6 +40,8 @@ export interface AttachmentMeta {
 export interface EmailSummary {
   readonly id: string;
   readonly sender: string;
+  /** 收件地址；Catch-All 场景用于区分不同别名。 */
+  readonly recipient: string;
   readonly subject: string;
   /** SQL 侧已截取+去标签的正文预览。 */
   readonly preview: string;
