@@ -10,8 +10,8 @@
  * 也不用在 wrangler.toml 里额外声明资源路由。
  */
 
-import { readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
 const ENTRY = resolve(ROOT, "web/src/app.ts");
@@ -65,6 +65,9 @@ async function inline(js: string): Promise<void> {
     `\n<script>\n${safe}\n</script>\n` +
     template.slice(end);
 
+  // `public/` 是被 gitignore 的构建输出目录，干净克隆里根本不存在
+  // （git 不跟踪空目录），所以写文件前必须先建目录。
+  await mkdir(dirname(OUTPUT), { recursive: true });
   await writeFile(OUTPUT, output, "utf8");
 }
 
