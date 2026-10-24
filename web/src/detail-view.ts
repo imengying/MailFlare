@@ -10,6 +10,7 @@ import { create, formatSize, isMobile } from "./dom.ts";
 import { icon } from "./icons.ts";
 import { buildSrcdoc, hasRemoteImages, htmlToText } from "./mail-render.ts";
 import type { AppState } from "./state.ts";
+import { senderInitial, senderTone } from "./sender.ts";
 import { emptyState } from "./ui.ts";
 
 export interface DetailHandlers {
@@ -72,12 +73,16 @@ export function renderDetail(state: AppState, handlers: DetailHandlers): void {
   addMeta("发件人", detail.sender);
   addMeta("收件人", detail.recipient);
   const metaWrap = create("div", { className: "detail-meta" });
-  metaWrap.append(meta);
-  head.append(metaWrap);
-  head.append(create("div", {
+  const info = create("div", { className: "detail-info" });
+  metaWrap.append(
+    create("span", { className: `mail-avatar detail-avatar tone-${senderTone(detail.sender)}`, textContent: senderInitial(detail.sender), ariaHidden: "true" }),
+    info,
+  );
+  info.append(meta, create("div", {
     className: "meta-time",
     textContent: new Date(detail.created_at).toLocaleString("zh-CN", { hour12: false }),
   }));
+  head.append(metaWrap);
 
   pane.replaceChildren(head);
   renderDetailBody(state, handlers);

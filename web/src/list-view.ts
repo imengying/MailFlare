@@ -9,6 +9,7 @@ import type { EmailSummary } from "./api-types.ts";
 import { create, el, formatTime } from "./dom.ts";
 import { icon } from "./icons.ts";
 import type { AppState } from "./state.ts";
+import { senderInitial, senderLabel, senderTone } from "./sender.ts";
 import { emptyState, skeletonRows } from "./ui.ts";
 
 export interface ListHandlers {
@@ -90,13 +91,6 @@ export function renderList(state: AppState, handlers: ListHandlers): void {
   pane.replaceChildren(frag);
 }
 
-/** 列表优先显示发件人名称，完整地址保留在 title 中。 */
-function senderLabel(sender: string): string {
-  if (!sender) return "(未知发件人)";
-  const match = /^(.*)<[^>]+>\s*$/.exec(sender);
-  return match?.[1]?.trim().replace(/^["']|["']$/g, "") || sender;
-}
-
 /** 单行邮件。 */
 function buildRow(item: EmailSummary, selected: boolean, onOpen: (id: string) => void): HTMLElement {
   const row = create("button", {
@@ -106,19 +100,26 @@ function buildRow(item: EmailSummary, selected: boolean, onOpen: (id: string) =>
   });
   if (selected) row.setAttribute("aria-current", "true");
 
+  const name = senderLabel(item.sender);
+  row.append(create("span", {
+    className: `mail-avatar tone-${senderTone(item.sender)}`,
+    textContent: senderInitial(item.sender),
+    ariaHidden: "true",
+  }));
+  const content = create("div", { className: "mail-content" });
   const head = create("div", { className: "row1" });
   head.append(
     create("span", { className: "unread-dot" }),
     create("span", {
       className: "from",
-      textContent: senderLabel(item.sender),
+      textContent: name,
       title: item.sender,
     }),
     create("span", { className: "when", textContent: formatTime(item.created_at) }),
   );
-  row.append(head);
+  content.append(head);
 
-  row.append(create("div", { className: "subj", textContent: item.subject || "(无主题)" }));
+  content.append(create("div", { className: "subj", textContent: item.subject || "(无主题)" }));
 
   const snippet = create("div", { className: "snippet" });
   // 压缩空白后截断；`textContent` 赋值保证不会把预览当 HTML 解析。
@@ -131,8 +132,8 @@ function buildRow(item: EmailSummary, selected: boolean, onOpen: (id: string) =>
     tag.append(icon("paperclip"), document.createTextNode(String(item.attachment_count)));
     snippet.append(tag);
   }
-  row.append(snippet);
-
+  content.append(snippet);
+  row.append(content);
   row.addEventListener("click", () => onOpen(item.id));
   return row;
 }
