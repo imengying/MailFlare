@@ -496,6 +496,12 @@ function bindEvents(): void {
     void refreshAppearance();
   });
 
+  // 手机端设置页会隐藏邮件工具栏，保留一个菜单键打开侧栏，
+  // 否则无法在设置与其他视图之间切换。
+  el<HTMLElement>("#settings-menu").addEventListener("click", () => {
+    setSidebarOpen(true);
+  });
+
   el<HTMLElement>("#open-settings").addEventListener("click", () => {
     setSidebarOpen(false);
     if (settings.isOpen()) {

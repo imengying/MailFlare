@@ -100,15 +100,11 @@ export function createSettingsController(
   form().addEventListener("input", () => {
     if (opened) setDirty(true);
   });
-  el<HTMLButtonElement>("#settings-back").addEventListener("click", () => {
-    void close();
-  });
 
   const setControlsDisabled = (disabled: boolean): void => {
     form().querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea").forEach((control) => {
       control.disabled = disabled;
     });
-    el<HTMLButtonElement>("#settings-back").disabled = disabled;
     el<HTMLButtonElement>("#settings-save").disabled = disabled;
   };
 

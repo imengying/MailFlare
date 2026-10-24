@@ -310,11 +310,11 @@
 
   #settings-view { position: relative; overflow: hidden; display: flex; flex-direction: column; background: var(--bg); }
   .settings-form { position: relative; width: min(920px, 100%); height: 100%; min-height: 0; margin: 0 auto; display: flex; flex-direction: column; }
-  .settings-head { display: flex; align-items: flex-start; gap: 12px; padding: 28px 28px 22px; flex-shrink: 0; }
+  .settings-head { display: flex; align-items: center; gap: 12px; padding: 28px 28px 22px; flex-shrink: 0; }
   .settings-heading { flex: 1; min-width: 0; }
   .settings-heading h2 { margin: 0; font-size: 23px; line-height: 1.3; letter-spacing: -.5px; }
   .settings-heading p { margin: 5px 0 0; color: var(--text-faint); font-size: 12.5px; }
-  .settings-close { flex-shrink: 0; margin-top: -5px; margin-right: -8px; background: var(--surface); border-color: var(--border); }
+  .settings-menu { display: none; flex-shrink: 0; }
   .settings-error { margin: 0 28px 16px; padding: 10px 12px; border-radius: 9px; background: var(--danger-soft); flex-shrink: 0; }
   .settings-error:empty { display: none; }
   .settings-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; grid-template-rows: none; grid-auto-rows: max-content; align-content: start; gap: 14px; padding: 0 28px 100px; }
@@ -344,6 +344,9 @@
   }
   #settings-save:hover:not(:disabled) { box-shadow: 0 13px 32px -9px var(--accent), 0 5px 14px rgba(24, 31, 56, .2); }
   #app-view.settings-open .toolbar { display: none; }
+  #app-view.settings-open .list-pane, #app-view.settings-open .detail-pane { display: none; }
+  #app-view.settings-open .split { grid-template-columns: minmax(0, 1fr); }
+  #app-view.settings-open #settings-view { grid-column: 1 / -1; }
   @media (min-width: 1200px) {
     .settings-grid.two-column, .notification-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
@@ -386,7 +389,6 @@
     #app-view .list-pane, #app-view .detail-pane, #app-view #settings-view { display: none; }
     #app-view:not(.showing) .list-pane { display: block; }
     #app-view.showing .detail-pane { display: flex; }
-    #app-view.settings-open .list-pane, #app-view.settings-open .detail-pane { display: none; }
     #app-view.settings-open #settings-view { display: flex; }
     .toolbar { min-height: 64px; padding: 11px 14px; gap: 8px; }
     .toolbar-heading { display: flex; align-items: baseline; gap: 8px; }
@@ -428,10 +430,10 @@
     .body-toolbar { margin-inline: 4px; }
     .attachment-list { grid-template-columns: 1fr; }
     .imgbar button { margin-left: 0; }
-    .settings-head { align-items: center; padding: 20px 16px 16px; }
+    .settings-head { align-items: center; padding: 18px 16px 15px; }
     .settings-heading h2 { font-size: 20px; }
     .settings-heading p { display: none; }
-    .settings-close { margin-top: 0; margin-right: -8px; }
+    .settings-menu { display: inline-flex; }
     .settings-error { margin: 0 16px 14px; }
     .settings-content { gap: 12px; padding: 0 12px 96px; }
     .settings-section-head { padding: 17px 16px 14px; }
@@ -544,11 +546,11 @@
       <section id="settings-view" aria-labelledby="settings-title" hidden>
         <form class="settings-form" id="settings-form">
           <header class="settings-head">
+            <button class="btn icon-btn ghost settings-menu" type="button" id="settings-menu" aria-label="打开导航" aria-controls="sidebar"><span data-icon="menu"></span></button>
             <div class="settings-heading">
               <h2 id="settings-title" tabindex="-1">设置</h2>
               <p>管理你的邮箱、外观与通知</p>
             </div>
-            <button class="btn sm ghost icon-btn settings-close" type="button" id="settings-back" title="关闭设置" aria-label="关闭设置"><span data-icon="close"></span></button>
           </header>
           <p class="err settings-error" id="settings-err" role="alert"></p>
           <div class="settings-content">
