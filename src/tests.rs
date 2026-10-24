@@ -852,7 +852,6 @@ mod settings_normalize {
             r2_concurrency: 999,
             page_size_default: 0,
             page_size_max: 9999,
-            jwt_ttl_secs: i64::MAX,
             ..Default::default()
         }
         .normalized();
@@ -863,7 +862,6 @@ mod settings_normalize {
         assert_eq!(s.r2_concurrency, 16);
         assert_eq!(s.page_size_default, 1);
         assert_eq!(s.page_size_max, 200);
-        assert_eq!(s.jwt_ttl_secs, 365 * 24 * 3600);
     }
 
     #[test]
@@ -1158,11 +1156,15 @@ mod site_appearance {
     }
 
     #[test]
-    fn color_values_pass_through() {
-        assert_eq!(public_background("#1a1a1a"), "#1a1a1a");
-        assert_eq!(public_background("rgb(20, 30, 40)"), "rgb(20, 30, 40)");
-        assert_eq!(public_background("white"), "white");
+    fn only_https_images_are_accepted() {
+        // 背景只接受图片地址，颜色值一律当作未设置。
+        assert_eq!(public_background("#1a1a1a"), "");
+        assert_eq!(public_background("rgb(20, 30, 40)"), "");
+        assert_eq!(public_background("white"), "");
         assert_eq!(public_background(""), "");
+        // 站内相对路径也不再支持：Worker 只托管一个 SPA 入口。
+        assert_eq!(public_background("/static/bg.jpg"), "");
+        assert_eq!(public_background("http://a.com/bg.jpg"), "");
     }
 
     #[test]
@@ -1177,10 +1179,6 @@ mod site_appearance {
         assert_eq!(
             public_background("https://cdn.example.com/bg.jpg"),
             "url(\"https://cdn.example.com/bg.jpg\")"
-        );
-        assert_eq!(
-            public_background("/static/bg.jpg"),
-            "url(\"/static/bg.jpg\")"
         );
     }
 

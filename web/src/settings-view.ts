@@ -133,7 +133,6 @@ export function createSettingsController(
     text("#public-url").value = settings.public_url;
 
     text("#ts-site-key").value = settings.turnstile_site_key;
-    text("#ts-hostname").value = settings.turnstile_hostname;
     fillSecret(
       "#ts-secret",
       settings.turnstile_secret_set,
@@ -186,7 +185,6 @@ export function createSettingsController(
 
     num("#page-size").value = String(settings.page_size_default);
     num("#page-size-max").value = String(settings.page_size_max);
-    num("#jwt-ttl").value = String(Math.round(settings.jwt_ttl_secs / 86400));
   };
 
   /**
@@ -211,7 +209,6 @@ export function createSettingsController(
       site_background: text("#site-background").value.trim(),
       public_url: text("#public-url").value.trim(),
       turnstile_site_key: text("#ts-site-key").value.trim(),
-      turnstile_hostname: text("#ts-hostname").value.trim(),
       telegram_enabled: check("#tg-enabled").checked,
       telegram_chat_id: text("#tg-chat").value.trim(),
       bark_enabled: check("#bark-enabled").checked,
@@ -256,9 +253,6 @@ export function createSettingsController(
 
     const pageSizeMax = readNumber("#page-size-max", 1);
     if (pageSizeMax !== undefined) patch.page_size_max = pageSizeMax;
-
-    const ttlDays = readNumber("#jwt-ttl", 86400);
-    if (ttlDays !== undefined) patch.jwt_ttl_secs = ttlDays;
 
     return patch;
   };

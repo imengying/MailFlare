@@ -17,6 +17,9 @@ pub const SCOPE_API: &str = "api";
 /// 附件下载票据用途。
 pub const SCOPE_DL: &str = "dl";
 
+/// 登录态固定有效期：7 天。
+pub const TOKEN_TTL_SECS: i64 = 7 * 24 * 3600;
+
 /// Cloudflare Turnstile 校验端点。
 const SITEVERIFY_URL: &str = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 
@@ -115,8 +118,6 @@ struct SiteVerifyResponse {
     #[serde(default)]
     #[serde(rename = "error-codes")]
     error_codes: Vec<String>,
-    #[serde(default)]
-    hostname: Option<String>,
 }
 
 /// 校验 Turnstile token。
@@ -178,13 +179,6 @@ pub async fn verify_turnstile(
             "人机验证未通过（{}）",
             result.error_codes.join(",")
         )));
-    }
-
-    // 可选加固：限制 token 只能在本站点使用。
-    if !settings.turnstile_hostname.is_empty()
-        && result.hostname.as_deref() != Some(settings.turnstile_hostname.as_str())
-    {
-        return Err(AppError::Forbidden("人机验证的 hostname 不匹配".into()));
     }
 
     Ok(())

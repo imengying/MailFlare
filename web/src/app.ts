@@ -10,7 +10,7 @@ import { ApiError, createApi } from "./api-client.ts";
 import { renderDetail, renderDetailBody, renderDetailError, renderDetailLoading } from "./detail-view.ts";
 import { mountIcons } from "./icons.ts";
 import { el, isMobile, prefersDark } from "./dom.ts";
-import { renderList, visibleItems } from "./list-view.ts";
+import { renderList } from "./list-view.ts";
 import { createSettingsController } from "./settings-view.ts";
 import { applyLoginBackground, applySiteIdentity } from "./site-theme.ts";
 import { createState } from "./state.ts";
@@ -480,52 +480,6 @@ async function changeFilter(button: HTMLElement): Promise<void> {
   await loadList({ reset: true });
 }
 
-/**
- * 全局快捷键。
- *
- * 只处理没有修饰键、焦点不在输入控件、且不在设置页时的按键；
- * 方向键只在已打开某封邮件时切换，避免误抢列表的滚动。
- */
-function handleShortcut(event: KeyboardEvent): boolean {
-  if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return false;
-  if (el<HTMLElement>("#app-view").hidden || settings.isOpen()) return false;
-  const target = document.activeElement;
-  if (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement ||
-    (target instanceof HTMLElement && target.isContentEditable)
-  ) {
-    return false;
-  }
-
-  if (event.key === "/") {
-    el<HTMLInputElement>("#search").focus();
-    return true;
-  }
-  if (event.key === "r" || event.key === "R") {
-    el<HTMLButtonElement>("#refresh").click();
-    return true;
-  }
-  if (event.key === "Delete") {
-    const id = state.selectedId;
-    if (id === null || state.detail?.id !== id) return false;
-    void deleteEmail(id);
-    return true;
-  }
-  const next = event.key === "j" || event.key === "J" || event.key === "ArrowDown";
-  const prev = event.key === "k" || event.key === "K" || event.key === "ArrowUp";
-  if (!next && !prev) return false;
-
-  const visible = visibleItems(state);
-  if (visible.length === 0) return false;
-  const current = visible.findIndex((item) => item.id === state.selectedId);
-  const index = current < 0 ? 0 : Math.min(visible.length - 1, Math.max(0, current + (next ? 1 : -1)));
-  const targetItem = visible[index];
-  if (targetItem && targetItem.id !== state.selectedId) void openEmail(targetItem.id);
-  return true;
-}
-
 function bindEvents(): void {
   el<HTMLFormElement>("#login-form").addEventListener("submit", (event) => {
     void handleLogin(event);
@@ -618,19 +572,16 @@ function bindEvents(): void {
   window.matchMedia("(max-width: 860px)").addEventListener("change", () => setSidebarOpen(false));
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      if (settings.isOpen()) {
-        void settings.close();
-        return;
-      }
-      if (el<HTMLElement>("#sidebar").classList.contains("open")) {
-        setSidebarOpen(false);
-        return;
-      }
-      closeDetail();
+    if (event.key !== "Escape") return;
+    if (settings.isOpen()) {
+      void settings.close();
       return;
     }
-    if (handleShortcut(event)) event.preventDefault();
+    if (el<HTMLElement>("#sidebar").classList.contains("open")) {
+      setSidebarOpen(false);
+      return;
+    }
+    closeDetail();
   });
 
   // 从后台切回来时立刻刷新，而不是等下一个 60 秒周期。

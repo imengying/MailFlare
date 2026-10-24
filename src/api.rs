@@ -105,7 +105,7 @@ async fn route(req: &mut Request, ctx: &ApiCtx<'_>, path: &str) -> AppResult<Res
             auth::require_admin(req, ctx.cfg)?;
             return Ok(ok_json(&SessionResponse {
                 authenticated: true,
-                expires_in: ctx.settings.jwt_ttl_secs,
+                expires_in: auth::TOKEN_TTL_SECS,
             }));
         }
         _ => {}
@@ -264,12 +264,15 @@ async fn login(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response> {
     guard = config::LoginGuard::default();
     guard.save(&db).await?;
 
-    // 始终使用设置里的完整有效期（默认 7 天）。
-    let ttl = ctx.settings.jwt_ttl_secs;
-    let token = auth::issue_token(ctx.cfg, auth::SCOPE_API, &ctx.cfg.admin_username, ttl)?;
+    let token = auth::issue_token(
+        ctx.cfg,
+        auth::SCOPE_API,
+        &ctx.cfg.admin_username,
+        auth::TOKEN_TTL_SECS,
+    )?;
     Ok(ok_json(&LoginResponse {
         token,
-        expires_in: ttl,
+        expires_in: auth::TOKEN_TTL_SECS,
     }))
 }
 
@@ -670,28 +673,13 @@ pub(crate) fn safe_image_source(value: &str) -> bool {
 
 /// 把背景配置转成可直接用的 CSS 值。
 ///
-/// 允许颜色（`#fff`、`rgb(...)`）或图片地址（包成 `url(...)`）。
-/// 输出要写进内联 `style`，所以能进来的值必须先过 [`safe_image_source`]。
+/// 只接受 https 图片地址；输出写进内联 `style`，所以必须先过 [`safe_image_source`]。
+/// 空串表示使用默认背景。
 pub(crate) fn public_background(raw: &str) -> String {
     let value = raw.trim();
-    if value.is_empty() {
+    if value.is_empty() || !value.to_ascii_lowercase().starts_with("https://") {
         return String::new();
     }
-    let lower = value.to_ascii_lowercase();
-    let is_image = lower.starts_with("https://")
-        || lower.starts_with("data:image/")
-        || (value.starts_with('/') && !value.starts_with("//"));
-
-    if !is_image {
-        // 颜色值：只允许字母数字与常见符号，挡掉 `;` `}` 之类的 CSS 注入。
-        let ok = value.len() <= 64
-            && value.bytes().all(|b| {
-                b.is_ascii_alphanumeric()
-                    || matches!(b, b'#' | b'(' | b')' | b',' | b'.' | b'%' | b' ' | b'-')
-            });
-        return if ok { value.to_string() } else { String::new() };
-    }
-
     if !safe_image_source(value) {
         return String::new();
     }
@@ -713,7 +701,6 @@ struct SettingsPatch {
 
     turnstile_site_key: Option<String>,
     turnstile_secret: Option<String>,
-    turnstile_hostname: Option<String>,
 
     telegram_enabled: Option<bool>,
     telegram_bot_token: Option<String>,
@@ -737,8 +724,6 @@ struct SettingsPatch {
 
     page_size_default: Option<i64>,
     page_size_max: Option<i64>,
-
-    jwt_ttl_secs: Option<i64>,
 }
 
 /// 把 `Settings` 上某个字段覆盖为 patch 里的值。
@@ -768,13 +753,13 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
     apply!(patch => settings;
         telegram_enabled, bark_enabled,
         max_body_bytes, max_message_bytes, max_attachment_bytes, r2_concurrency,
-        page_size_default, page_size_max, jwt_ttl_secs,
+        page_size_default, page_size_max,
     );
 
     // 非密钥字符串：有值就覆盖（空串即清空）。
     apply!(patch => settings;
         site_name, site_logo, site_background,
-        public_url, turnstile_site_key, turnstile_hostname,
+        public_url, turnstile_site_key,
         telegram_chat_id, bark_server,
         r2_account_id, r2_bucket,
     );
@@ -802,13 +787,16 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
     if settings.site_name.chars().count() > 40 {
         return Err(AppError::BadRequest("站点名不能超过 40 个字符".into()));
     }
-    if let Some(bad) = [&settings.site_logo, &settings.site_background]
-        .into_iter()
-        .find(|v| !v.is_empty() && !safe_image_source(v))
-    {
-        return Err(AppError::BadRequest(format!(
-            "图片地址「{bad}」不被允许：只接受 https 链接、站内相对路径或 data:image"
-        )));
+    // Logo 与背景现在都只接受 https 图片地址。
+    for (label, value) in [("Logo", &settings.site_logo), ("背景", &settings.site_background)] {
+        if !value.is_empty() && !value.to_ascii_lowercase().starts_with("https://") {
+            return Err(AppError::BadRequest(format!(
+                "{label}地址必须以 https:// 开头"
+            )));
+        }
+        if !value.is_empty() && !safe_image_source(value) {
+            return Err(AppError::BadRequest(format!("{label}地址格式不合法")));
+        }
     }
     if settings.public_url.contains('?') || settings.public_url.contains('#') {
         return Err(AppError::BadRequest(

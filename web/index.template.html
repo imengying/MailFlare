@@ -272,10 +272,6 @@
   .list-pane > .empty { min-height: 100%; padding: 32px 24px 56px; }
   .list-pane .empty-icon { width: 66px; height: 66px; border-radius: 21px; }
   .list-pane .empty-icon .icon { width: 28px; height: 28px; }
-  .shortcuts { display: flex; flex-wrap: wrap; justify-content: center; gap: 7px 16px; margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border); width: min(420px, 100%); }
-  .shortcut { display: inline-flex; align-items: center; gap: 6px; color: var(--text-faint); font-size: 11.5px; }
-  kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 5px; border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; background: var(--surface); color: var(--text-dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; line-height: 1; }
-
   .detail-head { padding: 24px 30px 20px; border-bottom: 1px solid var(--border); background: linear-gradient(110deg, var(--accent-wash), transparent 55%), var(--surface); }
   .detail-top { display: flex; align-items: flex-start; gap: 16px; }
   .detail-subject { flex: 1; min-width: 0; font-size: 22px; font-weight: 650; line-height: 1.4; letter-spacing: -.45px; margin: 0; overflow-wrap: anywhere; }
@@ -559,7 +555,7 @@
             <section class="settings-section">
               <header class="settings-section-head">
                 <span class="settings-section-icon"><span data-icon="palette"></span></span>
-                <div><h3>外观</h3><p>自定义登录页和应用中的站点标识。</p></div>
+                <div><h3>外观</h3><p>站点名称与图片，显示在登录页和侧栏。</p></div>
               </header>
               <div class="settings-section-body settings-grid two-column">
                 <div class="field">
@@ -568,13 +564,13 @@
                 </div>
                 <div class="field">
                   <label for="site-logo">Logo 地址</label>
-                  <input class="input" id="site-logo" autocomplete="off" placeholder="https://… 或 /logo.png">
-                  <span class="hint">留空使用默认邮件图标，支持图片链接或站内路径。</span>
+                  <input class="input" id="site-logo" autocomplete="off" placeholder="https://example.com/logo.png">
+                  <span class="hint">图片直链，留空使用默认图标。</span>
                 </div>
                 <div class="field full">
                   <label for="site-background">登录页背景</label>
-                  <input class="input" id="site-background" autocomplete="off" placeholder="#0f172a 或 https://…/bg.jpg">
-                  <span class="hint">填写颜色值或图片地址，留空使用默认背景。</span>
+                  <input class="input" id="site-background" autocomplete="off" placeholder="https://example.com/bg.jpg">
+                  <span class="hint">图片直链，留空使用默认背景。</span>
                 </div>
               </div>
             </section>
@@ -582,7 +578,7 @@
             <section class="settings-section">
               <header class="settings-section-head">
                 <span class="settings-section-icon"><span data-icon="shield"></span></span>
-                <div><h3>安全</h3><p>为登录页添加 Turnstile 人机验证。</p></div>
+                <div><h3>安全</h3><p>登录页的人机验证（Turnstile）。</p></div>
               </header>
               <div class="settings-section-body settings-grid two-column">
                 <div class="field">
@@ -595,9 +591,7 @@
                   <span class="hint" id="ts-secret-hint"></span>
                 </div>
                 <div class="field full">
-                  <label for="ts-hostname">限定 Hostname（可选）</label>
-                  <input class="input" id="ts-hostname" autocomplete="off" placeholder="mail.example.com">
-                  <span class="hint">Site Key 和 Secret Key 都填写后启用；限定域名可防止密钥被复用。</span>
+                  <span class="hint">两项都填写后才会启用。</span>
                 </div>
               </div>
             </section>
@@ -605,7 +599,7 @@
             <section class="settings-section">
               <header class="settings-section-head">
                 <span class="settings-section-icon"><span data-icon="bell"></span></span>
-                <div><h3>消息通知</h3><p>收到新邮件时向 Telegram 或 Bark 推送通知。</p></div>
+                <div><h3>消息通知</h3><p>新邮件到达时推送到 Telegram 或 Bark。</p></div>
               </header>
               <div class="settings-section-body">
                 <div class="notification-grid">
@@ -644,7 +638,7 @@
                 <div class="field" style="margin-top:17px">
                   <label for="public-url">站点地址</label>
                   <input class="input" id="public-url" autocomplete="off" placeholder="https://mail.example.com">
-                  <span class="hint">用于推送消息中的邮件详情链接，留空则不附带链接。</span>
+                  <span class="hint">推送里详情链接的前缀，留空则不带链接。</span>
                 </div>
               </div>
             </section>
@@ -652,7 +646,7 @@
             <section class="settings-section">
               <header class="settings-section-head">
                 <span class="settings-section-icon"><span data-icon="database"></span></span>
-                <div><h3>附件存储</h3><p>附件通过 S3 API 存入你的 R2 桶，路径前缀为 mail/att/。</p></div>
+                <div><h3>附件存储</h3><p>附件经 S3 API 存入 R2，路径前缀 <code>mail/att/</code>。</p></div>
               </header>
               <div class="settings-section-body settings-grid two-column">
                 <div class="field">
@@ -679,18 +673,18 @@
             <section class="settings-section">
               <header class="settings-section-head">
                 <span class="settings-section-icon"><span data-icon="filter"></span></span>
-                <div><h3>收信过滤</h3><p>黑名单命中后丢弃；白名单留空表示接收所有地址。</p></div>
+                <div><h3>收信过滤</h3><p>黑名单直接丢弃，白名单留空表示不限制收件地址。</p></div>
               </header>
               <div class="settings-section-body settings-grid two-column">
                 <div class="field">
                   <label for="blocked-senders">发件人黑名单</label>
                   <textarea class="input textarea" id="blocked-senders" rows="4" placeholder="spam@example.com&#10;@ads.example.com&#10;bad-domain.com"></textarea>
-                  <span class="hint">一行一条，支持完整地址、@域名或域名匹配。</span>
+                  <span class="hint">一行一条：完整地址、<code>@域名</code> 或裸域名。</span>
                 </div>
                 <div class="field">
                   <label for="allowed-recipients">收件人白名单</label>
                   <textarea class="input textarea" id="allowed-recipients" rows="4" placeholder="留空 = 接收本域任意地址"></textarea>
-                  <span class="hint">填写后只接收名单内的地址，写法同黑名单。</span>
+                  <span class="hint">填写后只接收名单内的地址，写法同上。</span>
                 </div>
               </div>
             </section>
@@ -698,23 +692,23 @@
             <section class="settings-section">
               <header class="settings-section-head">
                 <span class="settings-section-icon"><span data-icon="inbox"></span></span>
-                <div><h3>收信限制</h3><p>邮件正文存 D1，附件存 R2；超出邮件上限的邮件将被拒收。</p></div>
+                <div><h3>收信限制</h3><p>控制单封邮件的体积上限。</p></div>
               </header>
               <div class="settings-section-body settings-grid two-column">
                 <div class="field">
                   <label for="max-message">单封邮件上限</label>
                   <div class="inline-input"><input class="input" id="max-message" type="number" min="1" max="25" step="1"><span class="unit">MB</span></div>
-                  <span class="hint">Email Routing 硬上限为 25MB。</span>
+                  <span class="hint">Email Routing 上限 25MB。</span>
                 </div>
                 <div class="field">
                   <label for="max-body">正文入库上限</label>
                   <div class="inline-input"><input class="input" id="max-body" type="number" min="4" max="900" step="4"><span class="unit">KB</span></div>
-                  <span class="hint">超出部分将被截断。</span>
+                  <span class="hint">超出部分截断后入库。</span>
                 </div>
                 <div class="field">
                   <label for="max-attachment">单个附件上限</label>
                   <div class="inline-input"><input class="input" id="max-attachment" type="number" min="1" max="25" step="1"><span class="unit">MB</span></div>
-                  <span class="hint">超限附件不会保存。</span>
+                  <span class="hint">超过上限的附件不保存。</span>
                 </div>
                 <div class="field">
                   <label for="r2-concurrency">附件上传并发</label>
@@ -726,7 +720,7 @@
             <section class="settings-section">
               <header class="settings-section-head">
                 <span class="settings-section-icon"><span data-icon="sliders"></span></span>
-                <div><h3>列表与会话</h3><p>调整邮件分页和登录状态有效期。</p></div>
+                <div><h3>邮件列表</h3><p>每页加载的邮件数量。</p></div>
               </header>
               <div class="settings-section-body settings-grid two-column">
                 <div class="field">
@@ -736,10 +730,6 @@
                 <div class="field">
                   <label for="page-size-max">每页条数上限</label>
                   <input class="input" id="page-size-max" type="number" min="1" max="200" step="1">
-                </div>
-                <div class="field">
-                  <label for="jwt-ttl">登录有效期</label>
-                  <div class="inline-input"><input class="input" id="jwt-ttl" type="number" min="1" max="365" step="1"><span class="unit">天</span></div>
                 </div>
               </div>
             </section>

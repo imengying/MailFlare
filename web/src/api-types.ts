@@ -119,12 +119,12 @@ export interface AuthConfig {
 export interface SettingsView {
   readonly site_name: string;
   readonly site_logo: string;
+  /** 仅支持 https 图片地址；空串表示默认背景。 */
   readonly site_background: string;
   readonly public_url: string;
   readonly turnstile_site_key: string;
   readonly turnstile_secret_set: boolean;
   readonly turnstile_secret_hint: string;
-  readonly turnstile_hostname: string;
   readonly telegram_enabled: boolean;
   readonly telegram_bot_token_set: boolean;
   readonly telegram_bot_token_hint: string;
@@ -150,7 +150,6 @@ export interface SettingsView {
   readonly r2_concurrency: number;
   readonly page_size_default: number;
   readonly page_size_max: number;
-  readonly jwt_ttl_secs: number;
 }
 
 /**
@@ -167,7 +166,6 @@ export interface SettingsPatch {
   public_url?: string;
   turnstile_site_key?: string;
   turnstile_secret?: string;
-  turnstile_hostname?: string;
   telegram_enabled?: boolean;
   telegram_bot_token?: string;
   telegram_chat_id?: string;
@@ -186,5 +184,4 @@ export interface SettingsPatch {
   r2_concurrency?: number;
   page_size_default?: number;
   page_size_max?: number;
-  jwt_ttl_secs?: number;
 }

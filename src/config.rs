@@ -68,8 +68,6 @@ pub struct Settings {
     pub turnstile_site_key: String,
     /// 留空则跳过人机校验。
     pub turnstile_secret: String,
-    /// 限定 token 只能在该 hostname 上使用。
-    pub turnstile_hostname: String,
 
     // ---- Telegram -------------------------------------------------------
     pub telegram_enabled: bool,
@@ -106,9 +104,6 @@ pub struct Settings {
     pub page_size_default: i64,
     pub page_size_max: i64,
 
-    // ---- 会话 -----------------------------------------------------------
-    /// 登录有效期（秒）。
-    pub jwt_ttl_secs: i64,
 }
 
 impl Default for Settings {
@@ -120,7 +115,6 @@ impl Default for Settings {
             public_url: String::new(),
             turnstile_site_key: String::new(),
             turnstile_secret: String::new(),
-            turnstile_hostname: String::new(),
             telegram_enabled: false,
             telegram_bot_token: String::new(),
             telegram_chat_id: String::new(),
@@ -140,7 +134,6 @@ impl Default for Settings {
             r2_concurrency: 4,
             page_size_default: 20,
             page_size_max: 100,
-            jwt_ttl_secs: 7 * 24 * 3600,
         }
     }
 }
@@ -157,7 +150,6 @@ impl Settings {
         self.public_url = self.public_url.trim().trim_end_matches('/').to_string();
         self.turnstile_site_key = self.turnstile_site_key.trim().to_string();
         self.turnstile_secret = self.turnstile_secret.trim().to_string();
-        self.turnstile_hostname = self.turnstile_hostname.trim().to_string();
         self.telegram_bot_token = self.telegram_bot_token.trim().to_string();
         self.telegram_chat_id = self.telegram_chat_id.trim().to_string();
         self.bark_device_key = self.bark_device_key.trim().to_string();
@@ -187,8 +179,6 @@ impl Settings {
         if self.page_size_default > self.page_size_max {
             self.page_size_default = self.page_size_max;
         }
-        // 5 分钟 ~ 1 年。
-        self.jwt_ttl_secs = self.jwt_ttl_secs.clamp(300, 365 * 24 * 3600);
 
         self
     }
@@ -221,7 +211,6 @@ impl Settings {
             turnstile_site_key: &self.turnstile_site_key,
             turnstile_secret_set: !self.turnstile_secret.is_empty(),
             turnstile_secret_hint: hint(&self.turnstile_secret),
-            turnstile_hostname: &self.turnstile_hostname,
             telegram_enabled: self.telegram_enabled,
             telegram_bot_token_set: !self.telegram_bot_token.is_empty(),
             telegram_bot_token_hint: hint(&self.telegram_bot_token),
@@ -244,7 +233,6 @@ impl Settings {
             r2_concurrency: self.r2_concurrency,
             page_size_default: self.page_size_default,
             page_size_max: self.page_size_max,
-            jwt_ttl_secs: self.jwt_ttl_secs,
         }
     }
 }
@@ -258,7 +246,6 @@ pub struct SettingsView<'a> {
     pub turnstile_site_key: &'a str,
     pub turnstile_secret_set: bool,
     pub turnstile_secret_hint: &'a str,
-    pub turnstile_hostname: &'a str,
     pub telegram_enabled: bool,
     pub telegram_bot_token_set: bool,
     pub telegram_bot_token_hint: &'a str,
@@ -281,7 +268,6 @@ pub struct SettingsView<'a> {
     pub r2_concurrency: i64,
     pub page_size_default: i64,
     pub page_size_max: i64,
-    pub jwt_ttl_secs: i64,
 }
 
 /// 去空格、转小写、丢空项、去重。
