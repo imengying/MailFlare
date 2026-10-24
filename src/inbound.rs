@@ -17,7 +17,7 @@ use crate::error::{AppError, AppResult};
 use crate::mail;
 use crate::notify::{self, PushContext, PushEmail};
 use crate::r2;
-use crate::util::{new_id, now_ms, truncate_utf8};
+use crate::util::{new_id, now_ms};
 
 /// Email 事件入口。
 pub async fn handle(
@@ -337,17 +337,14 @@ fn spawn_push(settings: &Settings, env: &Env, ctx: Context, email: db::EmailDeta
     } else {
         email.text_body
     };
-    // 验证码只在推送时提取一次，正文随后就被丢弃。
-    let code = settings
-        .otp_enabled
-        .then(|| crate::otp::extract(&email.subject, &preview_source))
-        .flatten();
+    // 推送只服务验证码：没提取到就整封跳过，不打扰用户。
+    let Some(code) = crate::otp::extract(&email.subject, &preview_source) else {
+        return;
+    };
     let push_email = PushEmail {
         id: email.id,
         sender: email.sender,
         subject: email.subject,
-        preview: truncate_utf8(preview_source, 2 * 1024),
-        attachment_count: email.attachments.len(),
         code,
     };
 

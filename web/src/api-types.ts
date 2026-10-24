@@ -126,8 +126,6 @@ export interface SettingsView {
   readonly turnstile_secret_set: boolean;
   readonly turnstile_secret_hint: string;
   readonly telegram_enabled: boolean;
-  /** 从邮件提取验证码并置顶显示。 */
-  readonly otp_enabled: boolean;
   readonly telegram_bot_token_set: boolean;
   readonly telegram_bot_token_hint: string;
   readonly telegram_chat_id: string;
@@ -169,7 +167,6 @@ export interface SettingsPatch {
   turnstile_site_key?: string;
   turnstile_secret?: string;
   telegram_enabled?: boolean;
-  otp_enabled?: boolean;
   telegram_bot_token?: string;
   telegram_chat_id?: string;
   bark_enabled?: boolean;

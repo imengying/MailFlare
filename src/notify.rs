@@ -21,11 +21,8 @@ pub struct PushEmail {
     pub id: String,
     pub sender: String,
     pub subject: String,
-    /// 已裁剪好的正文预览（纯文本）。
-    pub preview: String,
-    pub attachment_count: usize,
-    /// 提取到的验证码（未启用或未命中时为 `None`）。
-    pub code: Option<crate::otp::Code>,
+    /// 提取到的验证码。推送只为验证码服务，没有它就不会走到这里。
+    pub code: crate::otp::Code,
 }
 
 /// 推送所需的上下文。
@@ -132,38 +129,22 @@ fn detail_link(public_url: Option<&str>, id: &str) -> Option<String> {
 }
 
 /// 构造 Telegram 消息文本（已转义）。
+///
+/// 推送只为验证码服务，所以正文只保留「谁发的、什么主题」这类定位信息，
+/// 不搬运邮件正文——验证码本身才是用户要的东西。
 fn telegram_text(ctx: &PushContext<'_>) -> String {
     let d = ctx.email;
-    let mut text = String::with_capacity(640);
+    let mut text = String::with_capacity(320);
 
-    text.push_str("*📬 新邮件*\n\n");
-    // 验证码单独一行大字显示，避免埋在正文里被划过去。
-    if let Some(code) = &d.code {
-        text.push_str(&format!(
-            "🔑 *{}：`{}`*\n\n",
-            code.label,
-            escape_markdown_v2(&code.value)
-        ));
-    }
+    text.push_str(&format!(
+        "🔑 *{}：`{}`*\n\n",
+        d.code.label,
+        escape_markdown_v2(&d.code.value)
+    ));
+
     let name = short_sender(&d.sender);
-    text.push_str(&format!("*发件人*：{}\n", escape_markdown_v2(name)));
-    if name != d.sender && !name.is_empty() {
-        text.push_str(&format!("*地址*：{}\n", escape_markdown_v2(&d.sender)));
-    }
+    text.push_str(&format!("*来自*：{}\n", escape_markdown_v2(name)));
     text.push_str(&format!("*主题*：{}\n", escape_markdown_v2(&d.subject)));
-
-    if d.attachment_count > 0 {
-        text.push_str(&format!("*附件*：{} 个\n", d.attachment_count));
-    }
-
-    let preview = d.preview.trim();
-    if !preview.is_empty() {
-        // 先按字符数截断（中文场景更贴近视觉长度），再按字节兜底。
-        let snippet: String = preview.chars().take(600).collect();
-        text.push('\n');
-        text.push_str(&escape_markdown_v2(snippet.trim()));
-        text.push('\n');
-    }
 
     if let Some(link) = detail_link(ctx.public_url, &d.id) {
         text.push_str(&format!(
@@ -337,7 +318,7 @@ async fn send_bark_text(
     }
 }
 
-/// 新邮件的 Telegram 通知。
+/// 验证码的 Telegram 通知。
 async fn push_telegram(ctx: &PushContext<'_>) -> ChannelResult {
     if !ctx.settings.telegram_enabled {
         return ChannelResult::Skipped;
@@ -345,24 +326,21 @@ async fn push_telegram(ctx: &PushContext<'_>) -> ChannelResult {
     send_telegram_text(ctx.settings, telegram_text(ctx)).await
 }
 
-/// 新邮件的 Bark 通知。
+/// 验证码的 Bark 通知。
 async fn push_bark(ctx: &PushContext<'_>) -> ChannelResult {
     let s = ctx.settings;
     if !s.bark_enabled {
         return ChannelResult::Skipped;
     }
 
-    let preview: String = ctx.email.preview.trim().chars().take(400).collect();
-    // 验证码放进标题，锁屏通知一眼就能看到。
-    let title = match &ctx.email.code {
-        Some(code) => format!("🔑 {} {}", code.label, code.value),
-        None => format!("📬 {}", ctx.email.subject),
-    };
-    let body = match &ctx.email.code {
-        Some(_) => format!("{}\n{}", ctx.email.subject, short_sender(&ctx.email.sender)),
-        None => format!("{}\n{}", short_sender(&ctx.email.sender), preview),
-    };
-    send_bark_text(s, title, body, detail_link(ctx.public_url, &ctx.email.id)).await
+    let code = &ctx.email.code;
+    send_bark_text(
+        s,
+        format!("🔑 {} {}", code.label, code.value),
+        format!("{}\n{}", short_sender(&ctx.email.sender), ctx.email.subject),
+        detail_link(ctx.public_url, &ctx.email.id),
+    )
+    .await
 }
 
 /// 并发推送两个渠道。
@@ -503,14 +481,15 @@ mod tests {
     use super::*;
     use crate::otp::Code;
 
-    fn email(code: Option<Code>) -> PushEmail {
+    fn email() -> PushEmail {
         PushEmail {
             id: "id1".into(),
             sender: "GitHub <noreply@github.com>".into(),
             subject: "Your verification code".into(),
-            preview: "Use 482913 to sign in.".into(),
-            attachment_count: 0,
-            code,
+            code: Code {
+                value: "482913".into(),
+                label: "验证码",
+            },
         }
     }
 
@@ -525,32 +504,30 @@ mod tests {
     #[test]
     fn telegram_puts_code_first() {
         let settings = Settings::default();
-        let mail = email(Some(Code {
-            value: "482913".into(),
-            label: "验证码",
-        }));
+        let mail = email();
         let text = telegram_text(&ctx(&settings, &mail));
-        // 验证码必须在发件人之前出现。
         let code_at = text.find("482913").expect("应包含验证码");
-        let sender_at = text.find("发件人").expect("应包含发件人");
-        assert!(code_at < sender_at, "验证码应置顶: {text}");
+        let from_at = text.find("来自").expect("应包含来源");
+        assert!(code_at < from_at, "验证码应置顶: {text}");
     }
 
     #[test]
-    fn telegram_without_code_has_no_code_line() {
+    fn telegram_carries_no_body_preview() {
+        // 验证码通知只做定位，不搬运正文。
         let settings = Settings::default();
-        let text = telegram_text(&ctx(&settings, &email(None)));
-        assert!(!text.contains("🔑"), "未命中时不应出现验证码行");
+        let text = telegram_text(&ctx(&settings, &email()));
+        assert!(!text.contains("新邮件"), "不应再有普通邮件标题");
     }
 
     #[test]
     fn code_is_markdown_escaped() {
         let settings = Settings::default();
         // 下划线属于 MarkdownV2 保留字符，必须被转义，否则 Telegram 会拒收。
-        let mail = email(Some(Code {
+        let mut mail = email();
+        mail.code = Code {
             value: "AB_12".into(),
             label: "验证码",
-        }));
+        };
         let text = telegram_text(&ctx(&settings, &mail));
         assert!(text.contains("AB\\_12"), "实际: {text}");
     }
