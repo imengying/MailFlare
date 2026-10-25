@@ -39,6 +39,39 @@ pub enum ChannelResult {
     Failed(String),
 }
 
+/// 从 HTML 错误页里抠出<title>和 Cloudflare 错误码。
+///
+/// 拦截页前几百个字符全是 IE 条件注释和 CSS，直接截断只会得到一堆噪音。
+/// 真正有用的是标题（`Attention Required! | Cloudflare`）和错误码
+/// （1010 = 浏览器签名被拒），这两个一出来就能定位问题。
+fn html_error_summary(html: &str) -> Option<String> {
+    let pick = |start: &str, end: &str| -> Option<String> {
+        let from = html.find(start)? + start.len();
+        let to = html[from..].find(end)? + from;
+        Some(html[from..to].trim().to_string())
+    };
+
+    // 错误码在 <span class="cf-error-code">error code: 1010</span> 里。
+    // 起点要越过 class 属性的引号尖括号，直接定位到内容开始处。
+    let code = pick("cf-error-code", "</span>")
+        .map(|rest| rest.trim_start_matches(['"', '>', ' ']).to_string())
+        .filter(|s| !s.is_empty());
+    let title = pick("<title>", "</title>");
+
+    let mut parts = Vec::new();
+    if let Some(t) = title.filter(|t| !t.is_empty()) {
+        parts.push(t);
+    }
+    if let Some(c) = code {
+        parts.push(format!("错误码 {c}"));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("；"))
+    }
+}
+
 /// 压平换行，避免日志串行。
 fn flatten(e: impl std::fmt::Display) -> String {
     e.to_string().replace('\n', " ")
@@ -223,7 +256,7 @@ async fn post_telegram(
         return Err("构造请求头失败".into());
     }
     // 与 Bark 一致：补普通客户端该有的头，避免被中间层当成脚本。
-    let _ = headers.set("user-agent", "MailFlare/1.0 (+https://github.com/imengying/MailFlare)");
+    let _ = headers.set("user-agent", "MailFlare/1.0");
     let _ = headers.set("accept", "application/json");
 
     let mut init = RequestInit::new();
@@ -290,11 +323,10 @@ async fn send_bark_text(settings: &Settings, title: String, body: String) -> Cha
     if headers.set("content-type", "application/json").is_err() {
         return ChannelResult::Failed("构造请求头失败".into());
     }
-    // Bark 官方服务挂在 Cloudflare 后面，而 Worker 的默认 UA（空或
-    // `Cloudflare-Workers`）容易被对方的 WAF 判成自动化请求，直接回 403
-    // 拦截页（响应体是一段 HTML，不是正经的 Bark 错误）。
-    // 这里补齐普通 HTTP 客户端该有的头，把请求伪装成正常调用。
-    let _ = headers.set("user-agent", "MailFlare/1.0 (+https://github.com/imengying/MailFlare)");
+    // 给一个干净、稳定的 UA。刻意不伪装成 `Mozilla/5.0`：
+    // Worker 的出口 IP 与真实浏览器对不上，伪装反而可能被 Cloudflare 的
+    // 浏览器签名校验（错误码 1010）拦掉。
+    let _ = headers.set("user-agent", "MailFlare/1.0");
     let _ = headers.set("accept", "application/json, */*");
     let _ = headers.set("accept-language", "zh-CN,zh;q=0.9,en;q=0.8");
 
@@ -305,20 +337,21 @@ async fn send_bark_text(settings: &Settings, title: String, body: String) -> Cha
 
     match fetch_with_timeout(url, init, PUSH_TIMEOUT).await {
         Ok((200..=299, _)) => ChannelResult::Ok,
-        // 403 且响应体是 HTML：基本可以确定是中间的 Cloudflare 拦的，
-        // 不是 Bark 在拒绝。换 GET（Bark 官方主推的形式）再试一次——
-        // 它的路径参数走的是完全不同的一条路由，能绕过针对 POST 的规则。
+        // 403 且响应体是 HTML：这是 Cloudflare 边缘的拦截页，不是 Bark 的拒绝。
+        // 先用 GET 再试一次：它走另一条路由，对少数只拦 POST 的规则有效。
+        // 1010（浏览器签名）这类拦截 GET 也会失败，那时错误摘要会直接显示错误码。
         Ok((403, detail)) if detail.contains("<!DOCTYPE") || detail.contains("no-js") => {
-            console_log!("[mailflare] Bark POST 被中间层拦截，降级为 GET 重试");
+            console_log!("[mailflare] Bark POST 被 Cloudflare 边缘拦截，降级为 GET 重试");
             send_bark_get(settings, &title_orig, &body_orig).await
         }
         Ok((code, detail)) => {
-            let detail = detail.trim();
-            if detail.is_empty() {
+            // HTML 拦截页只提取标题和错误码，整页截断全是注释噪音。
+            let short = html_error_summary(&detail).unwrap_or_else(|| {
+                detail.trim().chars().take(160).collect()
+            });
+            if short.is_empty() {
                 ChannelResult::Failed(format!("Bark 返回 HTTP {code}"))
             } else {
-                // 只取前 160 个字符：错误详情不需要全文，也不要带截断提示语。
-                let short: String = detail.chars().take(160).collect();
                 ChannelResult::Failed(format!("Bark 返回 HTTP {code}：{short}"))
             }
         }
@@ -344,14 +377,16 @@ async fn send_bark_get(settings: &Settings, title: &str, body: &str) -> ChannelR
     };
 
     let headers = worker::Headers::new();
-    let _ = headers.set("user-agent", "MailFlare/1.0 (+https://github.com/imengying/MailFlare)");
+    let _ = headers.set("user-agent", "MailFlare/1.0");
     let mut init = RequestInit::new();
     init.with_method(Method::Get).with_headers(headers);
 
     match fetch_with_timeout(url, init, PUSH_TIMEOUT).await {
         Ok((200..=299, _)) => ChannelResult::Ok,
         Ok((code, detail)) => {
-            let short: String = detail.trim().chars().take(160).collect();
+            let short = html_error_summary(&detail).unwrap_or_else(|| {
+                detail.trim().chars().take(160).collect()
+            });
             if short.is_empty() {
                 ChannelResult::Failed(format!("Bark 返回 HTTP {code}（GET 重试也失败）"))
             } else {
@@ -594,6 +629,30 @@ pub async fn alert_inbound_failure(
             ChannelResult::Ok => console_log!("[mailflare] {name} 告警已发送：{}", failure.label()),
             ChannelResult::Skipped => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod html_err {
+    use super::html_error_summary;
+
+    #[test]
+    fn extracts_title_and_code() {
+        // Cloudflare 1010 拦截页的典型结构。
+        let html = r#"<!DOCTYPE html>
+        <!--[if lt IE 7]> <html class="no-js ie6 oldie"> <![endif]-->
+        <head><title>Access denied | api.day.app used Cloudflare to restrict access</title></head>
+        <body><h1>Access denied</h1>
+        <span class="cf-error-code">error code: 1010</span></body></html>"#;
+        let got = html_error_summary(html).unwrap();
+        println!("=> {got}");
+        assert!(got.contains("Access denied"), "{got}");
+        assert!(got.contains("1010"), "{got}");
+    }
+
+    #[test]
+    fn returns_none_for_plain_text() {
+        assert!(html_error_summary("{\"code\":400}").is_none());
     }
 }
 

@@ -5,6 +5,10 @@ name = "mailflare"
 main = "build/worker/shim.mjs"
 
 compatibility_date = "2025-01-01"
+# 强制全局 fetch 只走公网：默认允许请求「同账号内的私有来源」，
+# 而推送目标是第三方服务（Bark / Telegram），走公网才是预期行为。
+# 配错了也不会静默访问到内部资源。
+compatibility_flags = ["global_fetch_strictly_public"]
 workers_dev = true
 
 # 关闭 Preview URLs：预览域名会把未发布的版本暴露到公网，
