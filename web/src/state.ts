@@ -30,6 +30,8 @@ export interface AppState {
   selectedId: string | null;
   detail: EmailDetail | null;
   loadingList: boolean;
+  /** 切换筛选/搜索中：保留旧列表，只做轻微过渡，不出骨架屏。 */
+  switching: boolean;
   loadingMore: boolean;
   /** 前端本地过滤关键词（不查后端）。 */
   search: string;
@@ -48,6 +50,7 @@ export function createState(): AppState {
     selectedId: null,
     detail: null,
     loadingList: false,
+    switching: false,
     loadingMore: false,
     search: "",
     allowRemoteImages: false,

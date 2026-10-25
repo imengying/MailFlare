@@ -261,6 +261,8 @@
   .unread-dot { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
   .mail-item:not(.unread) .unread-dot { display: none; }
   .load-more { width: calc(100% - 32px); margin: 16px; }
+  .list-pane.is-switching { opacity: .55; }
+  .list-pane { transition: opacity .12s ease; }
 
   .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; margin: auto; width: 100%; min-height: 100%; padding: 32px 28px 56px; text-align: center; color: var(--text-dim); }
   .empty-icon { position: relative; display: grid; place-items: center; width: 66px; height: 66px; margin: 0 auto 19px; border-radius: 21px; color: var(--accent); background: linear-gradient(140deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 25%, var(--surface))); border: 1px solid color-mix(in srgb, var(--border) 55%, var(--accent)); box-shadow: 0 14px 28px -20px var(--accent); }

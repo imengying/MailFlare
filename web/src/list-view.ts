@@ -59,6 +59,10 @@ export function renderList(state: AppState, handlers: ListHandlers): void {
     return;
   }
 
+  // 切换筛选时保留旧列表，只降低透明度表示「正在换」。
+  // 直接清空再填会闪一下骨架屏，观感像整页刷新。
+  pane.classList.toggle("is-switching", state.switching);
+
   const items = visibleItems(state);
   if (items.length === 0) {
     pane.replaceChildren(

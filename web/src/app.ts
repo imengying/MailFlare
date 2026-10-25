@@ -130,10 +130,17 @@ async function enterApp(): Promise<void> {
 // 列表
 // ===========================================================================
 
-async function loadList(options: { reset?: boolean; cursor?: string } = {}): Promise<void> {
-  const { reset = false, cursor } = options;
+async function loadList(
+  options: { reset?: boolean; cursor?: string; silent?: boolean } = {},
+): Promise<void> {
+  const { reset = false, cursor, silent = false } = options;
 
-  if (reset) {
+  if (silent) {
+    // 切换筛选时保留旧列表，等新数据到了再整体替换。
+    // 否则会先闪一下六行骨架屏，看起来像「刷新了一次」。
+    state.switching = true;
+    renderList(state, listHandlers);
+  } else if (reset) {
     state.loadingList = true;
     renderList(state, listHandlers);
   } else {
@@ -154,6 +161,7 @@ async function loadList(options: { reset?: boolean; cursor?: string } = {}): Pro
   } finally {
     state.loadingList = false;
     state.loadingMore = false;
+    state.switching = false;
     renderList(state, listHandlers);
   }
 }
@@ -462,7 +470,7 @@ async function changeFilter(button: HTMLElement): Promise<void> {
   state.detail = null;
   renderDetailEmpty();
   closeDetail();
-  await loadList({ reset: true });
+  await loadList({ reset: true, silent: true });
 }
 
 function bindEvents(): void {
