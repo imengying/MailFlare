@@ -129,7 +129,7 @@ pub async fn handle(
             );
             // 推送不阻塞收信：SMTP 侧已经可以拿到成功响应。
             // 复用上面已读到的设置，省掉一次 D1 往返。
-            spawn_push(ctx, email, cfg.clone());
+            spawn_push(&env, ctx, email, cfg.clone());
         }
         Ok(None) => {
             // 重复投递：静默成功，发信方无需重试。
@@ -329,7 +329,7 @@ async fn process(
 }
 
 /// 把推送任务挂到 `waitUntil` 上。
-fn spawn_push(ctx: Context, email: db::EmailDetail, settings: Settings) {
+fn spawn_push(env: &Env, ctx: Context, email: db::EmailDetail, settings: Settings) {
     // 提前裁好一小段预览：别让几百 KB 的正文一直活在 waitUntil 的 future 里。
     let preview_source = if email.text_body.is_empty() {
         email.html_body
@@ -347,17 +347,54 @@ fn spawn_push(ctx: Context, email: db::EmailDetail, settings: Settings) {
         code,
     };
 
+    let id = push_email.id.clone();
+    let code_value = push_email.code.value.clone();
+    let subject = push_email.subject.clone();
+    // 记录推送结果用；拿不到 D1 就跳过记录，不影响推送本身。
+    let log_db = env.d1("DB").ok();
+
     // 设置已在收信入口读过，直接复用，省掉一次 D1 往返。
     ctx.wait_until(async move {
         // 两个渠道都没开就不必再构造消息了。
         if !settings.telegram_enabled && !settings.bark_enabled {
+            // 有验证码却没推送：多半是设置没读到（load_settings 失败会退回默认值，
+            // 默认两个渠道都是关的）。这条日志能把这个隐形失败显出来。
+            console_log!("[mailflare] 提取到验证码 {code_value}（{id}），但两个推送渠道都未启用");
+            if let Some(db) = &log_db {
+                notify::record_push_log(
+                    db,
+                    &notify::PushLog {
+                        at: crate::util::now_secs(),
+                        subject,
+                        code: code_value,
+                        ok: false,
+                        channels: vec!["两个推送渠道都未启用".to_string()],
+                    },
+                )
+                .await;
+            }
             return;
         }
 
+        console_log!("[mailflare] 开始推送验证码 {code_value}（{id}）");
         let ctx = PushContext {
             settings: &settings,
             email: &push_email,
         };
-        notify::dispatch(&ctx).await;
+        let channels = notify::dispatch(&ctx).await;
+        // 结果落库：网页上看不到 Worker 日志，这是用户唯一能自查的入口。
+        if let Some(db) = &log_db {
+            notify::record_push_log(
+                db,
+                &notify::PushLog {
+                    at: crate::util::now_secs(),
+                    subject,
+                    code: code_value,
+                    ok: channels.iter().all(|c| c.ends_with("ok")),
+                    channels,
+                },
+            )
+            .await;
+        }
     });
 }

@@ -147,6 +147,46 @@ export function createSettingsController(
     }
   };
 
+  /**
+   * 展示最近一次真实推送的结果。
+   *
+   * 这一步是「为什么我没收到通知」的唯一自查入口：
+   * Worker 日志在网页上看不到，失败必须在这里露出来。
+   */
+  const lastPushBox = (): HTMLElement => el<HTMLElement>("#last-push-result");
+  const renderLastPush = (log: {
+    at: number;
+    subject: string;
+    code: string;
+    channels: string[];
+    ok: boolean;
+  } | null): void => {
+    const box = lastPushBox();
+    if (!log) {
+      box.hidden = true;
+      return;
+    }
+    box.replaceChildren();
+    box.hidden = false;
+
+    const when = new Date(log.at * 1000).toLocaleString("zh-CN", { hour12: false });
+    box.append(resultRow(log.ok ? "ok" : "failed", `${when} 收到验证码 ${log.code}`));
+    if (!log.ok) {
+      for (const line of log.channels) box.append(resultRow("failed", line));
+    }
+  };
+
+  void (async () => {
+    try {
+      const data = await api.request<{ last_push: Parameters<typeof renderLastPush>[0] }>(
+        "/api/settings/last-push",
+      );
+      renderLastPush(data.last_push);
+    } catch {
+      // 读不到就不显示，不打扰用户。
+    }
+  })();
+
   const testButton = (): HTMLButtonElement => el<HTMLButtonElement>("#test-push");
   testButton().addEventListener("click", () => {
     if (testing) return;

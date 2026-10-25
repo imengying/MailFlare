@@ -13,6 +13,8 @@ use crate::util::now_secs;
 pub mod keys {
     pub const SETTINGS: &str = "settings";
     pub const LOGIN_GUARD: &str = "login_guard";
+    /// 最近一次验证码推送的结果（JSON）。
+    pub const LAST_PUSH: &str = "last_push";
 }
 
 /// 读取必需的环境变量，缺失或为空时报错。
@@ -357,7 +359,7 @@ struct ConfigRow {
 }
 
 /// 读取 `configs` 表里指定 key 的 value（不存在或为 NULL 都返回 `None`）。
-async fn get_raw(db: &D1Database, key: &str) -> AppResult<Option<String>> {
+pub(crate) async fn get_raw(db: &D1Database, key: &str) -> AppResult<Option<String>> {
     let stmt = db
         .prepare("SELECT value FROM configs WHERE key = ?1")
         .bind_refs(&[worker::D1Type::Text(key)])?;
@@ -366,7 +368,7 @@ async fn get_raw(db: &D1Database, key: &str) -> AppResult<Option<String>> {
 }
 
 /// UPSERT 一个 key/value。
-async fn put_raw(db: &D1Database, key: &str, value: &str) -> AppResult<()> {
+pub(crate) async fn put_raw(db: &D1Database, key: &str, value: &str) -> AppResult<()> {
     // `D1Type::Integer` 只有 i32，秒级时间戳统一走 Real + CAST。
     let ts = now_secs() as f64;
     db.prepare(

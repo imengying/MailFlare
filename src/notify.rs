@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use worker::{console_error, console_log, Fetch, Method, Request, RequestInit, Url};
 
 use crate::config::Settings;
@@ -343,20 +343,61 @@ pub async fn test_push(settings: &Settings) -> (ChannelResult, ChannelResult) {
     (telegram, bark)
 }
 
-/// 并发推送两个渠道。
-pub async fn dispatch(ctx: &PushContext<'_>) {
+/// 最近一次推送结果的持久化形态。
+///
+/// 存进 D1 的意义：Worker 日志在网页上看不到，用户只会觉得「没收到」。
+/// 把最后一次的结果落到 `configs`，设置页就能直接显示失败原因。
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PushLog {
+    /// 秒级时间戳。
+    pub at: i64,
+    /// 触发的邮件主题，方便对上是哪一封。
+    pub subject: String,
+    pub code: String,
+    /// 每个渠道的结果，形如 `["telegram: ok", "bark: HTTP 400"]`。
+    pub channels: Vec<String>,
+    /// 是否全部成功。
+    pub ok: bool,
+}
+
+/// 把一次推送的结果写进 D1（失败只记日志，不影响收信）。
+pub async fn record_push_log(db: &worker::D1Database, log: &PushLog) {
+    let Ok(json) = serde_json::to_string(log) else {
+        return;
+    };
+    if let Err(e) = crate::config::put_raw(db, crate::config::keys::LAST_PUSH, &json).await {
+        console_error!("[mailflare] 写入推送状态失败: {e:?}");
+    }
+}
+
+/// 读取最近一次推送结果。
+pub async fn load_push_log(db: &worker::D1Database) -> Option<PushLog> {
+    let raw = crate::config::get_raw(db, crate::config::keys::LAST_PUSH)
+        .await
+        .ok()??;
+    serde_json::from_str(&raw).ok()
+}
+
+/// 并发推送两个渠道，返回每个渠道的可读结果。
+pub async fn dispatch(ctx: &PushContext<'_>) -> Vec<String> {
     let (telegram, bark) = futures_util::join!(push_telegram(ctx), push_bark(ctx));
 
+    let mut lines = Vec::new();
     // 日志带上邮件 id，便于区分「没推」和「推失败」。
     for (name, r) in [("telegram", &telegram), ("bark", &bark)] {
         match r {
             ChannelResult::Failed(msg) => {
-                console_error!("[mailflare] {name} 推送失败 ({}): {msg}", ctx.email.id)
+                console_error!("[mailflare] {name} 推送失败 ({}): {msg}", ctx.email.id);
+                lines.push(format!("{name}: {msg}"));
             }
-            ChannelResult::Ok => console_log!("[mailflare] {name} 推送成功 ({})", ctx.email.id),
+            ChannelResult::Ok => {
+                console_log!("[mailflare] {name} 推送成功 ({})", ctx.email.id);
+                lines.push(format!("{name}: ok"));
+            }
             ChannelResult::Skipped => {}
         }
     }
+    lines
 }
 
 // ===========================================================================

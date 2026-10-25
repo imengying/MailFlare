@@ -215,9 +215,6 @@ const detailHandlers = {
   onDelete(id: string): void {
     void deleteEmail(id);
   },
-  onCopyOtp(code: string): void {
-    void copyText(code);
-  },
 };
 
 async function markUnread(id: string): Promise<void> {
@@ -439,15 +436,6 @@ async function pollOnce(): Promise<void> {
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError || error instanceof Error) return error.message;
   return "未知错误";
-}
-
-async function copyText(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast("已复制");
-  } catch {
-    toast("复制失败");
-  }
 }
 
 // ===========================================================================

@@ -140,6 +140,10 @@ async fn route(req: &mut Request, ctx: &ApiCtx<'_>, path: &str) -> AppResult<Res
             let changed = db::mark_all_read(&db).await?;
             Ok(ok_json(&serde_json::json!({ "updated": changed })))
         }
+        "/api/settings/last-push" => {
+            require_method(&method, worker::Method::Get)?;
+            get_last_push(ctx).await
+        }
         "/api/settings/test-push" => {
             require_method(&method, worker::Method::Post)?;
             test_push(ctx).await
@@ -718,6 +722,16 @@ async fn test_push(ctx: &ApiCtx<'_>) -> AppResult<Response> {
 async fn get_settings(ctx: &ApiCtx<'_>) -> AppResult<Response> {
     // dispatch() 已经把设置读进 ctx.settings，这里直接用，不再查一次库。
     Ok(ok_json(&ctx.settings.redacted()))
+}
+
+/// 最近一次验证码推送的结果。
+///
+/// 单独一个接口而不是塞进 `/api/settings`：两者变化频率不同，
+/// 且推送结果属于「运行状态」，不是「配置」。
+async fn get_last_push(ctx: &ApiCtx<'_>) -> AppResult<Response> {
+    let db = ctx.db()?;
+    let log = crate::notify::load_push_log(&db).await;
+    Ok(ok_json(&serde_json::json!({ "last_push": log })))
 }
 
 /// 图片地址是否可安全地写进 CSS / `<img src>`。
