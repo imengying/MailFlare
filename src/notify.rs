@@ -45,7 +45,11 @@ fn flatten(e: impl std::fmt::Display) -> String {
 }
 
 /// `fetch` 没有超时参数，用 `AbortController` + `Delay` 竞速。
-async fn fetch_with_timeout(url: Url, init: RequestInit, timeout: Duration) -> Result<u16, String> {
+async fn fetch_with_timeout(
+    url: Url,
+    init: RequestInit,
+    timeout: Duration,
+) -> Result<(u16, String), String> {
     let controller = worker::AbortController::default();
     // 必须把 signal 真正挂到请求上，否则 abort() 只是空操作。
     // `worker::RequestInit` 没有 signal 字段，所以走 `send_with_signal`。
@@ -54,14 +58,16 @@ async fn fetch_with_timeout(url: Url, init: RequestInit, timeout: Duration) -> R
 
     let send = async move {
         let mut resp = request.send_with_signal(&signal).await.map_err(flatten)?;
-        // 必须把 body 读掉，连接才会及时归还到连接池。
-        let _ = resp.bytes().await;
-        Ok::<u16, String>(resp.status_code())
+        let status = resp.status_code();
+        // 读掉 body：一方面归还连接池，另一方面失败时把服务端的原因带回去。
+        // 推送渠道（尤其是 Bark）的报错往往只在响应体里，只留状态码没法排查。
+        let detail = resp.text().await.unwrap_or_default();
+        Ok::<(u16, String), String>((status, detail))
     };
 
     let timeout_fut = async {
         worker::Delay::from(timeout).await;
-        Err::<u16, String>("请求超时".to_string())
+        Err::<(u16, String), String>("请求超时".to_string())
     };
 
     // 用 `select`（函数式）而不是 `select!` 宏：宏要求 future 实现
@@ -214,7 +220,9 @@ async fn post_telegram(
         .with_headers(headers)
         .with_body(Some(worker::wasm_bindgen::JsValue::from_str(&body)));
 
-    fetch_with_timeout(url, init, PUSH_TIMEOUT).await
+    fetch_with_timeout(url, init, PUSH_TIMEOUT)
+        .await
+        .map(|(status, _)| status)
 }
 
 /// 去掉 MarkdownV2 转义用的反斜杠（降级为纯文本时使用）。
@@ -276,8 +284,18 @@ async fn send_bark_text(settings: &Settings, title: String, body: String) -> Cha
         .with_body(Some(worker::wasm_bindgen::JsValue::from_str(&body)));
 
     match fetch_with_timeout(url, init, PUSH_TIMEOUT).await {
-        Ok(200..=299) => ChannelResult::Ok,
-        Ok(code) => ChannelResult::Failed(format!("Bark 返回 HTTP {code}")),
+        Ok((200..=299, _)) => ChannelResult::Ok,
+        // 把服务端原话带出来：Bark 的 403 只说状态码根本没法定位。
+        Ok((code, detail)) => {
+            let detail = detail.trim();
+            if detail.is_empty() {
+                ChannelResult::Failed(format!("Bark 返回 HTTP {code}"))
+            } else {
+                // 只取前 160 个字符：错误详情不需要全文，也不要带截断提示语。
+                let short: String = detail.chars().take(160).collect();
+                ChannelResult::Failed(format!("Bark 返回 HTTP {code}：{short}"))
+            }
+        }
         Err(e) => ChannelResult::Failed(e),
     }
 }

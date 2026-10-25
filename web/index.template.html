@@ -480,7 +480,9 @@
 <body>
 
 <!-- ======================= 登录 ======================= -->
-<section id="login-view">
+<!-- 默认两个视图都隐藏：启动时要先校验 token 才能决定显示哪个，
+       否则会先闪一下登录页再跳进后台。 -->
+<section id="login-view" hidden>
   <form class="login-card" id="login-form" autocomplete="on">
     <div class="brand login-brand" id="login-brand">
       <span class="logo" id="login-logo"><span data-icon="mail"></span></span>
