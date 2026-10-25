@@ -106,47 +106,44 @@ export function createSettingsController(
   let testing = false;
   const testResult = (): HTMLElement => el<HTMLElement>("#test-push-result");
 
-  const renderTestResult = (payload: {
-    channels: { name: string; status: string; message: string }[];
-    all_skipped: boolean;
-  }): void => {
+  type TestChannel = { name: string; status: string; message: string };
+  type TestPayload = { channels: TestChannel[]; all_skipped: boolean };
+
+  /** 一行结果：圆点 + 文案。 */
+  const resultRow = (status: string, text: string): HTMLElement => {
+    const row = document.createElement("div");
+    row.className = `push-test-row ${status}`;
+    row.append(
+      Object.assign(document.createElement("span"), { className: "dot" }),
+      Object.assign(document.createElement("span"), { className: "msg", textContent: text }),
+    );
+    return row;
+  };
+
+  /**
+   * 只显示结论：全部成功就一行「测试成功」，否则只列失败项。
+   *
+   * 中间的「已发送」「已跳过」对使用者没有信息量，反倒是噪音。
+   */
+  const renderTestResult = (payload: TestPayload): void => {
     const box = testResult();
     box.replaceChildren();
     box.hidden = false;
 
     if (payload.all_skipped) {
-      const row = document.createElement("div");
-      row.className = "push-test-row skipped";
-      row.append(
-        Object.assign(document.createElement("span"), { className: "dot" }),
-        Object.assign(document.createElement("span"), {
-          className: "name",
-          textContent: "没有启用的渠道",
-        }),
-        Object.assign(document.createElement("span"), {
-          className: "msg",
-          textContent: "请先勾选 Telegram 或 Bark 并保存",
-        }),
-      );
-      box.append(row);
+      box.append(resultRow("skipped", "未启用通知渠道"));
       return;
     }
 
-    for (const channel of payload.channels) {
-      const row = document.createElement("div");
-      row.className = `push-test-row ${channel.status}`;
-      row.append(
-        Object.assign(document.createElement("span"), { className: "dot" }),
-        Object.assign(document.createElement("span"), {
-          className: "name",
-          textContent: channel.name,
-        }),
-        Object.assign(document.createElement("span"), {
-          className: "msg",
-          textContent: channel.message,
-        }),
-      );
-      box.append(row);
+    const failed = payload.channels.filter((c) => c.status === "failed");
+    if (failed.length === 0) {
+      box.append(resultRow("ok", "测试成功"));
+      return;
+    }
+    for (const channel of failed) {
+      // 没有渠道名（网络层失败）时只显示原因，避免「请求失败：请求失败」这种重复。
+      const text = channel.name ? `${channel.name}：${channel.message}` : channel.message;
+      box.append(resultRow("failed", text));
     }
   };
 
@@ -156,31 +153,27 @@ export function createSettingsController(
     testing = true;
     const button = testButton();
     button.disabled = true;
-    button.textContent = "发送中…";
+    button.textContent = "测试中…";
     testResult().hidden = true;
 
     void (async () => {
       try {
-        const payload = await api.request<{
-          channels: { name: string; status: string; message: string }[];
-          all_skipped: boolean;
-        }>("/api/settings/test-push", { method: "POST" });
+        const payload = await api.request<TestPayload>("/api/settings/test-push", {
+          method: "POST",
+        });
         renderTestResult(payload);
       } catch (error) {
+        // 网络层就失败了，没有渠道可归因，直接给一条失败行。
         renderTestResult({
           channels: [
-            {
-              name: "请求失败",
-              status: "failed",
-              message: error instanceof Error ? error.message : "未知错误",
-            },
+            { name: "", status: "failed", message: error instanceof Error ? error.message : "请求失败" },
           ],
           all_skipped: false,
         });
       } finally {
         testing = false;
         button.disabled = false;
-        button.textContent = "发送测试通知";
+        button.textContent = "测试";
       }
     })();
   });
