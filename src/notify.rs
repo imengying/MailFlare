@@ -292,7 +292,6 @@ struct BarkPayload<'a> {
     device_key: &'a str,
     title: String,
     body: String,
-    group: &'static str,
 }
 
 /// 发送一条 Bark 消息。同样抽成原语供告警复用。
@@ -303,11 +302,13 @@ async fn send_bark_text(settings: &Settings, title: String, body: String) -> Cha
 
     // 留一份原文：POST 被中间层拦截时要拿它走 GET 重试。
     let (title_orig, body_orig) = (title.clone(), body.clone());
+
+    // 不带 `group`：这个字段可选，而多一个字段就等于多一条可能命中的
+    // WAF 规则（Bark 前面的 Cloudflare 对陌生 JSON 结构更敏感）。
     let payload = BarkPayload {
         device_key: &settings.bark_device_key,
         title,
         body,
-        group: "MailFlare",
     };
 
     // 统一走 POST {server}/push：对长文本与特殊字符最安全。
@@ -337,12 +338,23 @@ async fn send_bark_text(settings: &Settings, title: String, body: String) -> Cha
 
     match fetch_with_timeout(url, init, PUSH_TIMEOUT).await {
         Ok((200..=299, _)) => ChannelResult::Ok,
-        // 403 且响应体是 HTML：这是 Cloudflare 边缘的拦截页，不是 Bark 的拒绝。
-        // 先用 GET 再试一次：它走另一条路由，对少数只拦 POST 的规则有效。
-        // 1010（浏览器签名）这类拦截 GET 也会失败，那时错误摘要会直接显示错误码。
+        // 403 且响应体是 HTML：这是 Cloudflare 的拦截页，不是 Bark 的拒绝。
         Ok((403, detail)) if detail.contains("<!DOCTYPE") || detail.contains("no-js") => {
-            console_log!("[mailflare] Bark POST 被 Cloudflare 边缘拦截，降级为 GET 重试");
-            send_bark_get(settings, &title_orig, &body_orig).await
+            // 拦截页带 "Attention Required" 且没有错误码时，是托管质询：
+            // 需要浏览器执行 JS 才能通过，Worker 的重试基本无望。
+            // 仍然给 GET 一次机会——它走另一条路由，成功率不高但不费事。
+            console_log!("[mailflare] Bark POST 被 Cloudflare 拦截，降级为 GET 重试");
+            let retry = send_bark_get(settings, &title_orig, &body_orig).await;
+            match retry {
+                ChannelResult::Ok => ChannelResult::Ok,
+                ChannelResult::Skipped => retry,
+                ChannelResult::Failed(_) => ChannelResult::Failed(
+                    // 两种方式都被拦：这不是配置错误，而是出口被质询。
+                    // 明确说清楚，免得用户反复去改 key。
+                    "Bark 返回 HTTP 403：请求被 Cloudflare 质询拦截（Worker 出口 IP 无法通过人机校验，与设备 Key 无关）"
+                        .to_string(),
+                ),
+            }
         }
         Ok((code, detail)) => {
             // HTML 拦截页只提取标题和错误码，整页截断全是注释噪音。
