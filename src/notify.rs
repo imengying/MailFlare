@@ -59,10 +59,18 @@ async fn fetch_with_timeout(
     let send = async move {
         let mut resp = request.send_with_signal(&signal).await.map_err(flatten)?;
         let status = resp.status_code();
+        // 失败时把「谁拦的」也带出来：403 可能来自渠道本身，也可能来自
+        // 中间的 Cloudflare 风控。`cf-mitigated` / `server` 能直接区分。
+        let mut hint = String::new();
+        let h = resp.headers();
+        for key in ["cf-mitigated", "server", "cf-ray"] {
+            if let Ok(Some(v)) = h.get(key) {
+                hint.push_str(&format!(" [{key}={v}]"));
+            }
+        }
         // 读掉 body：一方面归还连接池，另一方面失败时把服务端的原因带回去。
-        // 推送渠道（尤其是 Bark）的报错往往只在响应体里，只留状态码没法排查。
         let detail = resp.text().await.unwrap_or_default();
-        Ok::<(u16, String), String>((status, detail))
+        Ok::<(u16, String), String>((status, format!("{hint}{detail}")))
     };
 
     let timeout_fut = async {
@@ -214,6 +222,9 @@ async fn post_telegram(
     if headers.set("content-type", "application/json").is_err() {
         return Err("构造请求头失败".into());
     }
+    // 与 Bark 一致：补普通客户端该有的头，避免被中间层当成脚本。
+    let _ = headers.set("user-agent", "MailFlare/1.0 (+https://github.com/imengying/MailFlare)");
+    let _ = headers.set("accept", "application/json");
 
     let mut init = RequestInit::new();
     init.with_method(Method::Post)
@@ -257,6 +268,8 @@ async fn send_bark_text(settings: &Settings, title: String, body: String) -> Cha
         return ChannelResult::Failed("Bark device key 未配置".into());
     }
 
+    // 留一份原文：POST 被中间层拦截时要拿它走 GET 重试。
+    let (title_orig, body_orig) = (title.clone(), body.clone());
     let payload = BarkPayload {
         device_key: &settings.bark_device_key,
         title,
@@ -277,6 +290,13 @@ async fn send_bark_text(settings: &Settings, title: String, body: String) -> Cha
     if headers.set("content-type", "application/json").is_err() {
         return ChannelResult::Failed("构造请求头失败".into());
     }
+    // Bark 官方服务挂在 Cloudflare 后面，而 Worker 的默认 UA（空或
+    // `Cloudflare-Workers`）容易被对方的 WAF 判成自动化请求，直接回 403
+    // 拦截页（响应体是一段 HTML，不是正经的 Bark 错误）。
+    // 这里补齐普通 HTTP 客户端该有的头，把请求伪装成正常调用。
+    let _ = headers.set("user-agent", "MailFlare/1.0 (+https://github.com/imengying/MailFlare)");
+    let _ = headers.set("accept", "application/json, */*");
+    let _ = headers.set("accept-language", "zh-CN,zh;q=0.9,en;q=0.8");
 
     let mut init = RequestInit::new();
     init.with_method(Method::Post)
@@ -285,7 +305,13 @@ async fn send_bark_text(settings: &Settings, title: String, body: String) -> Cha
 
     match fetch_with_timeout(url, init, PUSH_TIMEOUT).await {
         Ok((200..=299, _)) => ChannelResult::Ok,
-        // 把服务端原话带出来：Bark 的 403 只说状态码根本没法定位。
+        // 403 且响应体是 HTML：基本可以确定是中间的 Cloudflare 拦的，
+        // 不是 Bark 在拒绝。换 GET（Bark 官方主推的形式）再试一次——
+        // 它的路径参数走的是完全不同的一条路由，能绕过针对 POST 的规则。
+        Ok((403, detail)) if detail.contains("<!DOCTYPE") || detail.contains("no-js") => {
+            console_log!("[mailflare] Bark POST 被中间层拦截，降级为 GET 重试");
+            send_bark_get(settings, &title_orig, &body_orig).await
+        }
         Ok((code, detail)) => {
             let detail = detail.trim();
             if detail.is_empty() {
@@ -297,6 +323,42 @@ async fn send_bark_text(settings: &Settings, title: String, body: String) -> Cha
             }
         }
         Err(e) => ChannelResult::Failed(e),
+    }
+}
+
+/// Bark 的 GET 形式：`{server}/{device_key}/{title}/{body}`。
+///
+/// 作为 POST 被中间层拦截时的备用通道。官方文档两种都支持，
+/// GET 的参数在路径里，绕开了针对 JSON 请求体的风控规则。
+async fn send_bark_get(settings: &Settings, title: &str, body: &str) -> ChannelResult {
+    let title = crate::util::percent_encode(title);
+    let body = crate::util::percent_encode(body);
+    let Ok(url) = Url::parse(&format!(
+        "{}/{}/{}/{}",
+        settings.bark_server,
+        crate::util::percent_encode(&settings.bark_device_key),
+        title,
+        body
+    )) else {
+        return ChannelResult::Failed("Bark 服务地址非法".into());
+    };
+
+    let headers = worker::Headers::new();
+    let _ = headers.set("user-agent", "MailFlare/1.0 (+https://github.com/imengying/MailFlare)");
+    let mut init = RequestInit::new();
+    init.with_method(Method::Get).with_headers(headers);
+
+    match fetch_with_timeout(url, init, PUSH_TIMEOUT).await {
+        Ok((200..=299, _)) => ChannelResult::Ok,
+        Ok((code, detail)) => {
+            let short: String = detail.trim().chars().take(160).collect();
+            if short.is_empty() {
+                ChannelResult::Failed(format!("Bark 返回 HTTP {code}（GET 重试也失败）"))
+            } else {
+                ChannelResult::Failed(format!("Bark 返回 HTTP {code}（GET 重试）：{short}"))
+            }
+        }
+        Err(e) => ChannelResult::Failed(format!("{e}（GET 重试）")),
     }
 }
 
