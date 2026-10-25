@@ -85,6 +85,8 @@ export type EmailDetail = {
   readonly is_read: boolean;
   readonly created_at: number;
   readonly attachment_urls: AttachmentUrl[];
+  /** 从邮件里提取到的验证码；没有则为 null。 */
+  readonly otp_code: string | null;
 };
 
 /** `POST /api/auth/login` 的响应。 */

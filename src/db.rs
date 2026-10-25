@@ -85,6 +85,20 @@ pub struct ListQuery {
     /// 游标：(created_at, id)
     pub cursor: Option<(i64, String)>,
     pub limit: i64,
+    /// 关键词：主题 / 发件人 / 收件人模糊匹配。空表示不过滤。
+    pub search: Option<String>,
+}
+
+/// 把用户输入包成 `LIKE` 模式，并转义通配符。
+///
+/// 不转义的话，用户输入一个 `%` 就能匹配全部邮件（虽然只读，但结果明显不对）；
+/// `_` 同样会变成「任意单字符」。
+pub(crate) fn escape_like(keyword: &str) -> String {
+    let escaped = keyword
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("%{escaped}%")
 }
 
 /// 毫秒时间戳 -> D1 绑定值（见模块注释）。
@@ -171,8 +185,9 @@ fn collapse_whitespace(s: &str) -> String {
 
 /// 极简 HTML 去标签（不追求语义正确）。
 ///
-/// 特点是**单遍扫描、不分配中间字符串**：遇到 `<` 跳到下一个 `>`；顺带把
+/// 特点是**单遍扫描**：遇到 `<` 跳到下一个 `>`；顺带把
 /// `<style>`/`<script>` 的内容整段丢掉，避免预览里出现一堆 CSS。
+/// 最后解码常见 HTML 实体，否则预览会露出 `&nbsp;`、`&amp;` 这类源码。
 pub fn strip_html_preview(html: &str) -> String {
     let mut out = String::with_capacity(html.len().min(512));
     let bytes = html.as_bytes();
@@ -207,7 +222,74 @@ pub fn strip_html_preview(html: &str) -> String {
         }
     }
 
-    collapse_whitespace(&out)
+    decode_entities(&collapse_whitespace(&out))
+}
+
+/// 解码常见 HTML 实体。
+///
+/// 只处理排版里最常见的一批，够列表预览用；不追求完整实现
+/// （完整版要带上千个命名实体表，为预览多背一张表不划算）。
+fn decode_entities(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+
+    while let Some(pos) = rest.find('&') {
+        out.push_str(&rest[..pos]);
+        rest = &rest[pos..];
+
+        // 实体最长十几个字符，取一小段找分号。
+        let Some(semi) = rest[..rest.len().min(12)].find(';') else {
+            // 没有分号：不是实体，原样保留这个 & 继续往后扫。
+            out.push('&');
+            rest = &rest[1..];
+            continue;
+        };
+        let entity = &rest[1..semi];
+        let decoded = match entity {
+            "nbsp" => Some(' '),
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            "mdash" => Some('—'),
+            "ndash" => Some('–'),
+            "hellip" => Some('…'),
+            "ldquo" => Some('“'),
+            "rdquo" => Some('”'),
+            "lsquo" => Some('‘'),
+            "rsquo" => Some('’'),
+            "middot" => Some('·'),
+            "copy" => Some('©'),
+            "reg" => Some('®'),
+            "trade" => Some('™'),
+            // 数字实体：&#39; / &#8212; 等。
+            _ => decode_numeric_entity(entity),
+        };
+
+        match decoded {
+            Some(ch) => {
+                out.push(ch);
+                rest = &rest[semi + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 解码 `#39` / `#x27` 形式的数字实体。
+fn decode_numeric_entity(entity: &str) -> Option<char> {
+    let digits = entity.strip_prefix('#')?;
+    let code = match digits.strip_prefix(['x', 'X']) {
+        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+        None => digits.parse::<u32>().ok()?,
+    };
+    char::from_u32(code).filter(|c| !c.is_control())
 }
 
 /// 插入邮件；返回 `true` 表示确实是新邮件（`false` 说明 message_id 重复被忽略）。
@@ -289,13 +371,28 @@ pub async fn list_emails(
     if query.unread_only {
         sql.push_str(" AND is_read = 0");
     }
+    // 搜索在服务端做：只过滤前端已加载的那 20 条会漏掉更早的历史邮件。
+    // 关键词全部走绑定参数，不存在注入面。
+    if query.search.is_some() {
+        sql.push_str(
+            " AND (subject LIKE ? ESCAPE '\\' OR sender LIKE ? ESCAPE '\\' \
+             OR recipient LIKE ? ESCAPE '\\')",
+        );
+    }
     if query.cursor.is_some() {
         // 用 (created_at, id) 复合游标保证同一毫秒内的记录也能稳定翻页。
         sql.push_str(" AND (created_at < ? OR (created_at = ? AND id < ?))");
     }
     sql.push_str(" ORDER BY created_at DESC, id DESC LIMIT ?");
 
-    let mut binds: Vec<D1Type<'_>> = Vec::with_capacity(4);
+    let mut binds: Vec<D1Type<'_>> = Vec::with_capacity(8);
+    // 提前构造：`bind_refs` 借用这个串，必须活得比 binds 久。
+    let search_pattern = query.search.as_ref().map(|keyword| escape_like(keyword));
+    if let Some(pattern) = &search_pattern {
+        for _ in 0..3 {
+            binds.push(D1Type::Text(pattern));
+        }
+    }
     if let Some((created_at, id)) = &query.cursor {
         binds.push(ts(*created_at));
         binds.push(ts(*created_at));

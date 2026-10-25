@@ -20,15 +20,14 @@ export interface ListHandlers {
 }
 
 /** 按本地搜索关键词过滤（纯前端，不触发网络请求）。 */
+/**
+ * 当前要展示的邮件。
+ *
+ * 搜索已改到后端（`/api/emails?q=`），所以这里直接返回列表——
+ * 再从本地过滤一遍反而会漏掉正文命中但预览没命中的结果。
+ */
 export function visibleItems(state: AppState): EmailSummary[] {
-  if (!state.search) return state.items;
-  const query = state.search.toLowerCase();
-  return state.items.filter(
-    (item) =>
-      item.subject.toLowerCase().includes(query) ||
-      item.sender.toLowerCase().includes(query) ||
-      item.preview.toLowerCase().includes(query),
-  );
+  return state.items;
 }
 
 /** 更新侧边栏「未读邮件」角标。标为已读时单独调用，不必重绘整个列表。 */
@@ -49,9 +48,8 @@ export function renderList(state: AppState, handlers: ListHandlers): void {
   renderUnreadBadge(state);
   const count = el<HTMLElement>("#list-count");
   count.hidden = state.items.length === 0;
-  count.textContent = state.search
-    ? `${visibleItems(state).length} / ${state.items.length} 封`
-    : `${state.items.length} 封`;
+  // 搜索已由后端过滤，返回的就是命中结果，直接报总数即可。
+  count.textContent = `${visibleItems(state).length} 封`;
   const allRead = el<HTMLButtonElement>("#mark-all-read");
   allRead.disabled = state.unread === 0;
   allRead.title = state.unread === 0 ? "没有未读邮件" : `将 ${state.unread} 封未读邮件标为已读`;

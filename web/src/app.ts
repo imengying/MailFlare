@@ -142,6 +142,8 @@ async function loadList(options: { reset?: boolean; cursor?: string } = {}): Pro
 
   const params = new URLSearchParams();
   if (state.filter === "unread") params.set("filter", "unread");
+  // 搜索交给后端：只过滤前端已加载的那几条会漏掉更早的邮件。
+  if (state.search) params.set("q", state.search);
   if (cursor !== undefined) params.set("cursor", cursor);
 
   try {
@@ -220,6 +222,9 @@ const detailHandlers = {
   },
   onCopyMessageId(messageId: string): void {
     void copyText(messageId);
+  },
+  onCopyOtp(code: string): void {
+    void copyText(code);
   },
 };
 
@@ -561,8 +566,9 @@ function bindEvents(): void {
     // 防抖：连续输入时不要每敲一个字就重排整个列表。
     searchTimer = setTimeout(() => {
       state.search = value;
-      renderList(state, listHandlers);
-    }, 120);
+      // 关键词变了就得重新取第一页，不能只在本地列表里筛。
+      void loadList({ reset: true });
+    }, 220);
   });
 
   el<HTMLElement>("#toggle-sidebar").addEventListener("click", () => {

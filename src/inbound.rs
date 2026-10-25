@@ -128,7 +128,8 @@ pub async fn handle(
                 email.attachments.len()
             );
             // 推送不阻塞收信：SMTP 侧已经可以拿到成功响应。
-            spawn_push(&env, ctx, email);
+            // 复用上面已读到的设置，省掉一次 D1 往返。
+            spawn_push(ctx, email, cfg.clone());
         }
         Ok(None) => {
             // 重复投递：静默成功，发信方无需重试。
@@ -328,7 +329,7 @@ async fn process(
 }
 
 /// 把推送任务挂到 `waitUntil` 上。
-fn spawn_push(env: &Env, ctx: Context, email: db::EmailDetail) {
+fn spawn_push(ctx: Context, email: db::EmailDetail, settings: Settings) {
     // 提前裁好一小段预览：别让几百 KB 的正文一直活在 waitUntil 的 future 里。
     let preview_source = if email.text_body.is_empty() {
         email.html_body
@@ -346,19 +347,8 @@ fn spawn_push(env: &Env, ctx: Context, email: db::EmailDetail) {
         code,
     };
 
-    let Ok(db) = env.d1("DB") else {
-        console_error!("[mailflare] 无法访问 D1，跳过推送");
-        return;
-    };
-
+    // 设置已在收信入口读过，直接复用，省掉一次 D1 往返。
     ctx.wait_until(async move {
-        let settings = match config::load_settings(&db).await {
-            Ok(s) => s,
-            Err(e) => {
-                console_error!("[mailflare] 读取推送配置失败: {e:?}");
-                return;
-            }
-        };
         // 两个渠道都没开就不必再构造消息了。
         if !settings.telegram_enabled && !settings.bark_enabled {
             return;

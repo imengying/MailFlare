@@ -8,6 +8,31 @@
 
 #[cfg(test)]
 mod unit {
+    use crate::db::strip_html_preview;
+
+    #[test]
+    fn like_pattern_escapes_wildcards() {
+        // `%` 和 `_` 必须被转义，否则等于「匹配全部」。
+        assert_eq!(crate::db::escape_like("a%b"), "%a\\%b%");
+        assert_eq!(crate::db::escape_like("a_b"), "%a\\_b%");
+        // 普通中文关键词原样包进 %...%。
+        assert_eq!(crate::db::escape_like("验证码"), "%验证码%");
+    }
+
+    #[test]
+    fn strip_html_decodes_common_entities() {
+        assert_eq!(strip_html_preview("<p>a&nbsp;b &amp; c</p>"), "a b & c");
+        assert_eq!(strip_html_preview("<p>&#39;x&#39;</p>"), "'x'");
+        assert_eq!(strip_html_preview("<p>&#x27;y&#x27;</p>"), "'y'");
+        // 孤立 & 不能吞掉后面的文字。
+        assert_eq!(strip_html_preview("<p>a & b</p>"), "a & b");
+    }
+
+    #[test]
+    fn strip_html_keeps_unknown_entities_untouched() {
+        assert_eq!(strip_html_preview("<p>&weird;</p>"), "&weird;");
+    }
+
     use crate::db::AttachmentMeta;
     use crate::mail;
     use crate::r2;

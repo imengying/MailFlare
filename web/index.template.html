@@ -259,7 +259,7 @@
   .attachment-tag .icon { width: 11px; height: 11px; }
   .mail-item.unread .from, .mail-item.unread .subj { color: var(--text); font-weight: 650; }
   .unread-dot { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
-  .mail-item:not(.unread) .unread-dot { visibility: hidden; }
+  .mail-item:not(.unread) .unread-dot { display: none; }
   .load-more { width: calc(100% - 32px); margin: 16px; }
 
   .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; margin: auto; width: 100%; min-height: 100%; padding: 32px 28px 56px; text-align: center; color: var(--text-dim); }
@@ -274,6 +274,13 @@
   .detail-head { padding: 24px 30px 20px; border-bottom: 1px solid var(--border); background: linear-gradient(110deg, var(--accent-wash), transparent 55%), var(--surface); }
   .detail-top { display: flex; align-items: flex-start; gap: 16px; }
   .detail-subject { flex: 1; min-width: 0; font-size: 22px; font-weight: 650; line-height: 1.4; letter-spacing: -.45px; margin: 0; overflow-wrap: anywhere; }
+  .otp-pill { display: inline-flex; align-items: center; gap: 8px; margin-top: 14px; padding: 8px 12px 8px 11px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border)); border-radius: 10px; background: var(--accent-soft); color: var(--accent); font: inherit; cursor: pointer; transition: background .15s, border-color .15s, transform .15s; }
+  .otp-pill:hover { background: color-mix(in srgb, var(--accent-soft) 62%, var(--accent)); border-color: var(--accent); }
+  .otp-pill:active { transform: scale(.985); }
+  .otp-pill .icon { width: 15px; height: 15px; }
+  .otp-label { font-size: 12px; font-weight: 600; color: var(--text-dim); }
+  .otp-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 16px; font-weight: 700; letter-spacing: .06em; color: var(--text); }
+  .otp-copy { padding-left: 8px; border-left: 1px solid color-mix(in srgb, var(--accent) 26%, transparent); font-size: 12px; font-weight: 600; }
   .detail-actions { display: flex; gap: 7px; flex-shrink: 0; }
   .detail-meta { display: flex; align-items: flex-start; gap: 12px; margin-top: 20px; padding: 13px 15px; border: 1px solid var(--border); border-radius: 11px; background: color-mix(in srgb, var(--surface-2) 75%, transparent); }
   .detail-avatar { flex-shrink: 0; }

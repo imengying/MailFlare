@@ -45,7 +45,10 @@ export function buildSrcdoc(html: string, allowRemoteImages: boolean): string {
     csp +
     "<style>" +
     "html,body{margin:0;padding:0}" +
-    'body{font:14px/1.7 -apple-system,system-ui,"PingFang SC",sans-serif;word-break:break-word}' +
+    // 显式给正文定底色与字色：暗色系统下透明背景会被浏览器染成浅色字，
+    // 落在写死的白底 iframe 上等于白底白字。
+    'body{font:14px/1.7 -apple-system,system-ui,"PingFang SC",sans-serif;' +
+    'word-break:break-word;color:#1f2329;background:#fff;padding:16px 20px}' +
     "img{max-width:100%;height:auto}" +
     "table{max-width:100%}" +
     "a{color:#2f6bff}" +

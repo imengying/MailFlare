@@ -29,7 +29,9 @@ migrations_dir = "migrations"
 [assets]
 directory = "./public"
 binding = "ASSETS"
-run_worker_first = true
+# 只让 /api/* 进 Worker：静态资源（HTML/JS/CSS/图标）由边缘直接返回，
+# 不消耗 Worker 请求配额，也没有冷启动等待。
+run_worker_first = ["/api/*"]
 not_found_handling = "single-page-application"
 
 # 环境变量只有三个登录凭证，其余配置都在 D1：

@@ -325,6 +325,11 @@ async fn list_emails(req: &Request, ctx: &ApiCtx<'_>) -> AppResult<Response> {
 
     let cursor = query_param(&url, "cursor").and_then(|c| parse_cursor(&c));
 
+    // 关键词带长度上限：LIKE 全表扫描，过长的串纯属浪费。
+    let search = query_param(&url, "q")
+        .map(|q| q.trim().chars().take(120).collect::<String>())
+        .filter(|q| !q.is_empty());
+
     let db = ctx.db()?;
     let (items, next_cursor, unread) = db::list_emails(
         &db,
@@ -332,6 +337,7 @@ async fn list_emails(req: &Request, ctx: &ApiCtx<'_>) -> AppResult<Response> {
             unread_only,
             cursor,
             limit,
+            search,
         },
     )
     .await?;
@@ -350,6 +356,8 @@ struct EmailDetailResponse {
     email: db::EmailDetail,
     /// 每个可下载附件的 URL（只包含成功转存到 R2 的）。
     attachment_urls: Vec<AttachmentUrl>,
+    /// 从这封邮件里提取到的验证码；没有则为空。
+    otp_code: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -375,6 +383,17 @@ async fn get_email(ctx: &ApiCtx<'_>, id: &str) -> AppResult<Response> {
     // 有效期 10 分钟：足够用户读完一封邮件，又不会让 URL 被长期泄露可用。
     let dl_token = auth::issue_token(ctx.cfg, SCOPE_DL, id, DL_TICKET_TTL)?;
 
+    // 验证码在收信推送时已提取过一次，这里对详情实时再提取一次透出给前端，
+    // 用户不用进正文里手动找码。
+    let otp_code = {
+        let source = if email.text_body.is_empty() {
+            &email.html_body
+        } else {
+            &email.text_body
+        };
+        crate::otp::extract(&email.subject, source).map(|c| c.value)
+    };
+
     let attachment_urls = email
         .attachments
         .iter()
@@ -397,6 +416,7 @@ async fn get_email(ctx: &ApiCtx<'_>, id: &str) -> AppResult<Response> {
     Ok(ok_json(&EmailDetailResponse {
         email,
         attachment_urls,
+        otp_code,
     }))
 }
 
@@ -785,17 +805,6 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
     // ---- 校验：把明显错误的配置挡在写库之前 -----------------------------
     if settings.site_name.chars().count() > 40 {
         return Err(AppError::BadRequest("站点名不能超过 40 个字符".into()));
-    }
-    // Logo 与背景现在都只接受 https 图片地址。
-    for (label, value) in [("Logo", &settings.site_logo), ("背景", &settings.site_background)] {
-        if !value.is_empty() && !value.to_ascii_lowercase().starts_with("https://") {
-            return Err(AppError::BadRequest(format!(
-                "{label}地址必须以 https:// 开头"
-            )));
-        }
-        if !value.is_empty() && !safe_image_source(value) {
-            return Err(AppError::BadRequest(format!("{label}地址格式不合法")));
-        }
     }
     // Logo 与背景现在都只接受 https 图片地址。
     for (label, value) in [("Logo", &settings.site_logo), ("背景", &settings.site_background)] {

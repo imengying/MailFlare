@@ -24,6 +24,8 @@ export interface DetailHandlers {
   onDelete(id: string): void;
   /** 复制 Message-ID（复制动作本身由调用方实现）。 */
   onCopyMessageId(messageId: string): void;
+  /** 复制验证码（复制动作本身由调用方实现）。 */
+  onCopyOtp(code: string): void;
 }
 
 /** 详情加载中的骨架屏。 */
@@ -64,6 +66,23 @@ export function renderDetail(state: AppState, handlers: DetailHandlers): void {
     buildActions(detail, handlers),
   );
   head.append(top);
+
+  // 有验证码就把它提到标题下面：用户多半只为取这一串数字点开邮件。
+  if (detail.otp_code) {
+    const pill = create("button", {
+      className: "otp-pill",
+      type: "button",
+      title: "点击复制验证码",
+    });
+    pill.append(
+      icon("code"),
+      create("span", { className: "otp-label", textContent: "验证码" }),
+      create("span", { className: "otp-value", textContent: detail.otp_code }),
+      create("span", { className: "otp-copy", textContent: "复制" }),
+    );
+    pill.addEventListener("click", () => handlers.onCopyOtp(detail.otp_code!));
+    head.append(pill);
+  }
 
   const meta = create("dl", { className: "meta-line" });
   const addMeta = (label: string, value: string): void => {
