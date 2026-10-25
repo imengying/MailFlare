@@ -229,6 +229,9 @@ function buildImageBar(handlers: DetailHandlers): HTMLElement {
   return bar;
 }
 
+/** iframe 最大高度；超过这个高度就放开内部滚动，避免生成几万像素高的元素。 */
+const MAX_IFRAME_HEIGHT = 12000;
+
 /** 沙箱 iframe。 */
 function buildIframe(html: string, allowRemoteImages: boolean): HTMLIFrameElement {
   const iframe = create("iframe", { className: "mail-html" });
@@ -248,17 +251,51 @@ function buildIframe(html: string, allowRemoteImages: boolean): HTMLIFrameElemen
   iframe.srcdoc = buildSrcdoc(html, allowRemoteImages);
 
   iframe.addEventListener("load", () => {
+    fitIframe(iframe);
+
+    // 图片是异步加载的，加载完正文会变高；只在 load 时算一次会把底部截断。
     try {
       const doc = iframe.contentDocument;
       if (!doc) return;
-      const height = Math.min(Math.max(doc.documentElement.scrollHeight, 320), 4000);
-      iframe.style.height = `${height}px`;
+      for (const img of doc.querySelectorAll("img")) {
+        if (img.complete) continue;
+        img.addEventListener("load", () => fitIframe(iframe));
+        img.addEventListener("error", () => fitIframe(iframe));
+      }
     } catch {
-      // 跨域文档读不到 scrollHeight，保持默认高度。
+      // 读不到文档就退化成固定高度。
     }
+
+    // 字体替换等布局变化没有事件可听，补两次延迟重算。
+    setTimeout(() => fitIframe(iframe), 400);
+    setTimeout(() => fitIframe(iframe), 1200);
   });
 
   return iframe;
+}
+
+/**
+ * 按正文实际高度调整 iframe，避免「外层 + iframe 内部」两条滚动条。
+ *
+ * - 正文不超高：iframe 撑到完整高度并关掉内部滚动，只留 `.detail-pane` 一条。
+ * - 正文超长：iframe 定高，此时必须放开内部滚动，否则尾部内容永远读不到；
+ *   这是超长邮件的无奈之选，普通邮件走不到这个分支。
+ */
+function fitIframe(iframe: HTMLIFrameElement): void {
+  try {
+    const doc = iframe.contentDocument;
+    if (!doc) return;
+    const full = Math.max(doc.documentElement.scrollHeight, 320);
+    if (full > MAX_IFRAME_HEIGHT) {
+      iframe.style.height = `${MAX_IFRAME_HEIGHT}px`;
+      iframe.setAttribute("scrolling", "yes");
+    } else {
+      iframe.style.height = `${full}px`;
+      iframe.setAttribute("scrolling", "no");
+    }
+  } catch {
+    // 跨域文档读不到 scrollHeight，保持默认高度。
+  }
 }
 
 /** 附件列表（不含内联资源）。 */

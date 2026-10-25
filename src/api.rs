@@ -664,9 +664,8 @@ async fn get_attachment(req: &Request, ctx: &ApiCtx<'_>, object_id: &str) -> App
 // ===========================================================================
 
 async fn get_settings(ctx: &ApiCtx<'_>) -> AppResult<Response> {
-    let db = ctx.db()?;
-    let settings = config::load_settings(&db).await?;
-    Ok(ok_json(&settings.redacted()))
+    // dispatch() 已经把设置读进 ctx.settings，这里直接用，不再查一次库。
+    Ok(ok_json(&ctx.settings.redacted()))
 }
 
 /// 图片地址是否可安全地写进 CSS / `<img src>`。

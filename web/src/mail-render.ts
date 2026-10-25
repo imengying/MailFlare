@@ -48,7 +48,10 @@ export function buildSrcdoc(html: string, allowRemoteImages: boolean): string {
     // 显式给正文定底色与字色：暗色系统下透明背景会被浏览器染成浅色字，
     // 落在写死的白底 iframe 上等于白底白字。
     'body{font:14px/1.7 -apple-system,system-ui,"PingFang SC",sans-serif;' +
-    'word-break:break-word;color:#1f2329;background:#fff;padding:16px 20px}' +
+    // color-scheme:light 让表单控件、滚动条也走浅色，不被系统暗色主题染色；
+    // 这两个属性都能被邮件自带的样式覆盖，所以不会破坏原有排版。
+    'word-break:break-word;color:#1f2329;background:#fff;padding:16px 20px;' +
+    'color-scheme:light}' +
     "img{max-width:100%;height:auto}" +
     "table{max-width:100%}" +
     "a{color:#2f6bff}" +
