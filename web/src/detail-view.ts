@@ -74,10 +74,24 @@ export function renderDetail(state: AppState, handlers: DetailHandlers): void {
     create("span", { className: `mail-avatar detail-avatar tone-${senderTone(detail.sender)}`, textContent: senderInitial(detail.sender), ariaHidden: "true" }),
     info,
   );
-  info.append(meta, create("div", {
-    className: "meta-time",
-    textContent: new Date(detail.created_at).toLocaleString("zh-CN", { hour12: false }),
-  }));
+  const timeRow = create("div", { className: "meta-time" });
+  timeRow.append(
+    create("span", {
+      textContent: new Date(detail.created_at).toLocaleString("zh-CN", { hour12: false }),
+    }),
+  );
+  // 推送状态紧跟在时间后面：有验证码的邮件才由后端写入，其余为 null 不显示。
+  if (detail.push_status) {
+    const ok = detail.push_status === "ok";
+    timeRow.append(
+      create("span", {
+        className: `push-badge ${ok ? "ok" : "failed"}`,
+        textContent: ok ? "已推送" : "推送失败",
+        title: ok ? "验证码已发送到通知渠道" : "验证码推送失败，可在设置页查看原因",
+      }),
+    );
+  }
+  info.append(meta, timeRow);
   head.append(metaWrap);
 
   pane.replaceChildren(head);

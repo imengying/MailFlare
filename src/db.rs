@@ -64,6 +64,8 @@ pub struct EmailDetail {
     pub attachments: Vec<AttachmentMeta>,
     pub is_read: bool,
     pub created_at: i64,
+    /// 验证码推送结果：`None` 未尝试，`Some("ok")` 成功，`Some("failed")` 失败。
+    pub push_status: Option<String>,
 }
 
 /// 入库用的完整记录（写入侧用）。
@@ -152,6 +154,8 @@ struct DetailRow {
     is_read: Option<i64>,
     #[serde(default)]
     created_at: Option<i64>,
+    #[serde(default)]
+    push_status: Option<String>,
 }
 
 /// 解析 attachments JSON；损坏时返回空数组而不是报错，保证邮件本身还能看。
@@ -486,7 +490,7 @@ pub async fn get_email(db: &D1Database, id: &str) -> AppResult<Option<EmailDetai
     let stmt = db
         .prepare(
             "SELECT id, message_id, sender, recipient, subject, text_body, html_body, \
-             attachments, is_read, created_at FROM emails WHERE id = ?1",
+             attachments, is_read, created_at, push_status FROM emails WHERE id = ?1",
         )
         .bind_refs(&[D1Type::Text(id)])?;
 
@@ -502,6 +506,7 @@ pub async fn get_email(db: &D1Database, id: &str) -> AppResult<Option<EmailDetai
         html_body: r.html_body.unwrap_or_default(),
         is_read: r.is_read.unwrap_or(0) != 0,
         created_at: r.created_at.unwrap_or_default(),
+        push_status: r.push_status,
     }))
 }
 
@@ -537,6 +542,15 @@ pub async fn set_read(db: &D1Database, id: &str, read: bool) -> AppResult<bool> 
     let result = stmt.run().await?;
     // 同上：只有明确 0 行受影响才认为邮件不存在。
     Ok(result.meta()?.and_then(|m| m.changes) != Some(0))
+}
+
+/// 写入推送结果：`ok` / `failed`。
+pub async fn set_push_status(db: &D1Database, id: &str, status: &str) -> AppResult<()> {
+    db.prepare("UPDATE emails SET push_status = ?1 WHERE id = ?2")
+        .bind_refs(&[D1Type::Text(status), D1Type::Text(id)])?
+        .run()
+        .await?;
+    Ok(())
 }
 
 /// 把所有未读邮件标为已读，返回受影响行数。

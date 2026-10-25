@@ -8,7 +8,7 @@
 
 ```
    SMTP ──► Email Routing ──► #[event(email)]
-                                ├─► R2   mail/att/{id}/{n}（S3 API）
+                                ├─► R2   mail/{id}/{n}（S3 API）
                                 ├─► D1   emails
                                 └─► waitUntil() ──► Telegram ‖ Bark
 
@@ -116,7 +116,7 @@ R2 只承担附件，这样 D1 的单行长度不会被附件撑爆。
 | 外观 | 站点名称、Logo、登录页背景（均为 https 图片地址） |
 | Turnstile | Site Key + Secret 都填才会在登录页显示验证框；留空则只剩密码一道防线 |
 | Telegram / Bark | 验证码推送渠道，Token 留空表示不修改 |
-| R2 存储 | 账号 ID、Access Key、Secret Key、桶名（附件都放在桶内 `mail/att/`） |
+| R2 存储 | 账号 ID、Access Key、Secret Key、桶名（附件都放在桶内 `mail/`） |
 | 收信过滤 | 发件人黑名单、收件人白名单 |
 | 收信 | 单封大小上限、正文截断阈值、附件上限、上传并发 |
 | 邮件列表 | 每页条数 |

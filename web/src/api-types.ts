@@ -84,6 +84,8 @@ export type EmailDetail = {
   readonly attachments: AttachmentMeta[];
   readonly is_read: boolean;
   readonly created_at: number;
+  /** 验证码推送结果：null 未尝试，ok 成功，failed 失败。 */
+  readonly push_status: "ok" | "failed" | null;
   readonly attachment_urls: AttachmentUrl[];
   /** 从邮件里提取到的验证码；没有则为 null。 */
   readonly otp_code: string | null;

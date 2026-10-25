@@ -281,6 +281,9 @@
   .meta-line dt { color: var(--text-faint); }
   .meta-line dd { margin: 0; overflow-wrap: anywhere; }
   .meta-time { margin-top: 6px; font-size: 11.5px; color: var(--text-faint); }
+  .push-badge { display: inline-flex; align-items: center; margin-left: 8px; padding: 1px 7px; border-radius: 6px; font-size: 10.5px; font-weight: 600; letter-spacing: .2px; cursor: default; }
+  .push-badge.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+  .push-badge.failed { color: var(--danger); background: var(--danger-soft); }
   .body-wrap { width: 100%; max-width: 1040px; margin: 0 auto; padding: 24px 32px 40px; }
   .body-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; min-height: 34px; }
   .tabs { display: inline-flex; gap: 3px; padding: 3px; border-radius: 10px; background: var(--surface-3); }
@@ -643,7 +646,7 @@
             <section class="settings-section">
               <header class="settings-section-head">
                 <span class="settings-section-icon"><span data-icon="database"></span></span>
-                <div><h3>附件存储</h3><p>附件经 S3 API 存入 R2，路径前缀 <code>mail/att/</code>。</p></div>
+                <div><h3>附件存储</h3><p>附件经 S3 API 存入 R2，路径前缀 <code>mail/</code>。</p></div>
               </header>
               <div class="settings-section-body settings-grid two-column">
                 <div class="field">

@@ -324,6 +324,8 @@ async fn process(
         html_body: parsed.html_body,
         attachments: metas,
         is_read: false,
+        // 新入库的邮件还没推送，状态由推送任务回填。
+        push_status: None,
         created_at,
     }))
 }
@@ -361,6 +363,7 @@ fn spawn_push(env: &Env, ctx: Context, email: db::EmailDetail, settings: Setting
             // 默认两个渠道都是关的）。这条日志能把这个隐形失败显出来。
             console_log!("[mailflare] 提取到验证码 {code_value}（{id}），但两个推送渠道都未启用");
             if let Some(db) = &log_db {
+                let _ = crate::db::set_push_status(db, &id, "failed").await;
                 notify::record_push_log(
                     db,
                     &notify::PushLog {
@@ -382,15 +385,22 @@ fn spawn_push(env: &Env, ctx: Context, email: db::EmailDetail, settings: Setting
             email: &push_email,
         };
         let channels = notify::dispatch(&ctx).await;
-        // 结果落库：网页上看不到 Worker 日志，这是用户唯一能自查的入口。
+        let ok = channels.iter().all(|c| c.ends_with("ok"));
+        // 两处落库：
+        // - emails.push_status：详情页时间后面直接显示「已推送 / 推送失败」
+        // - configs.last_push：保存完整原因，设置页可查
         if let Some(db) = &log_db {
+            if let Err(e) = crate::db::set_push_status(db, &id, if ok { "ok" } else { "failed" }).await
+            {
+                console_error!("[mailflare] 写入推送状态失败: {e:?}");
+            }
             notify::record_push_log(
                 db,
                 &notify::PushLog {
                     at: crate::util::now_secs(),
                     subject,
                     code: code_value,
-                    ok: channels.iter().all(|c| c.ends_with("ok")),
+                    ok,
                     channels,
                 },
             )

@@ -3,7 +3,7 @@
 //! 走 S3 API 而非 Worker 绑定，端点、密钥、桶名全部来自设置表，
 //! 改完即时生效，且不限制桶名。
 //!
-//! key 布局：`mail/att/{email_id}/{index}`
+//! key 布局：`mail/{email_id}/{index}`
 
 use worker::{console_error, Fetch, Headers, Method, Request, RequestInit, Response};
 
@@ -17,10 +17,10 @@ use crate::util::{ascii_filename, now_ms, percent_encode};
 /// 对象 key 的统一前缀。
 const KEY_PREFIX: &str = "mail";
 
-/// 附件对象 key：`mail/att/{email_id}/{index}`。
+/// 附件对象 key：`mail/{email_id}/{index}`。
 #[inline]
 pub fn attachment_key(email_id: &str, index: usize) -> String {
-    format!("{KEY_PREFIX}/att/{email_id}/{index}")
+    format!("{KEY_PREFIX}/{email_id}/{index}")
 }
 
 /// 附件下载 ID：`{email_id}_{index}`。
@@ -365,8 +365,8 @@ mod tests {
 
     #[test]
     fn key_layout_uses_mail_prefix() {
-        assert_eq!(attachment_key("abc123", 0), "mail/att/abc123/0");
-        assert_eq!(attachment_key("abc123", 12), "mail/att/abc123/12");
+        assert_eq!(attachment_key("abc123", 0), "mail/abc123/0");
+        assert_eq!(attachment_key("abc123", 12), "mail/abc123/12");
     }
 
     #[test]
