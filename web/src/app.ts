@@ -179,7 +179,6 @@ async function openEmail(id: string): Promise<void> {
   if (settings.isOpen() && !(await settings.close())) return;
   const request = ++detailRequest;
   state.selectedId = id;
-  state.activeTab = "html";
   state.allowRemoteImages = false;
   el<HTMLElement>("#app-view").classList.add("showing");
   renderList(state, listHandlers);
@@ -206,10 +205,6 @@ async function openEmail(id: string): Promise<void> {
 }
 
 const detailHandlers = {
-  onTabChange(tab: "html" | "text"): void {
-    state.activeTab = tab;
-    if (state.detail) renderDetail(state, detailHandlers);
-  },
   onAllowImages(): void {
     state.allowRemoteImages = true;
     renderDetailBody(state, detailHandlers);
@@ -219,9 +214,6 @@ const detailHandlers = {
   },
   onDelete(id: string): void {
     void deleteEmail(id);
-  },
-  onCopyMessageId(messageId: string): void {
-    void copyText(messageId);
   },
   onCopyOtp(code: string): void {
     void copyText(code);

@@ -21,25 +21,34 @@ pub struct Code {
 ///
 /// 顺序有意义：越具体的越靠前，命中即返回。
 const KEYWORDS: &[(&str, &str)] = &[
+    // 顺序有意义：`extract` 按这个表依次尝试，**更具体的必须排在泛用的前面**，
+    // 否则「login code: 123456」会先被 `code` 命中，标签也跟着变成通用文案。
     ("verification code", "验证码"),
     ("confirmation code", "验证码"),
-    ("confirmation number", "验证码"),
+    ("confirmation number", "确认码"),
     ("security code", "安全码"),
-    // 单独的 `code` 很常见（Apple ID Code、login code），但泛用性最强，
-    // 所以放在靠后位置，先让更具体的关键词命中。
-    ("code", "验证码"),
     ("login code", "登录码"),
     ("one-time code", "验证码"),
     ("one time password", "验证码"),
+    // 泛用词放最后：Apple ID Code、login code 这类都靠它兜底。
+    ("code", "验证码"),
     ("otp", "验证码"),
+    ("2fa", "验证码"),
+    // 中文：各家的叫法差一个字就漏，「安全代码」与「安全码」是两个不同的串，
+    // 必须都列上（微软用前者）。
+    ("安全代码", "安全码"),
+    ("安全码", "安全码"),
     ("验证码", "验证码"),
+    ("验证代码", "验证码"),
     ("动态码", "动态码"),
+    ("动态密码", "动态密码"),
     ("校验码", "校验码"),
     ("确认码", "确认码"),
+    ("确认代码", "确认码"),
     ("登录码", "登录码"),
-    ("安全码", "安全码"),
+    ("一次性密码", "一次性密码"),
+    ("临时密码", "临时密码"),
     ("激活码", "激活码"),
-    ("2fa", "验证码"),
 ];
 
 /// 从邮件里提取验证码；没有可信结果时返回 `None`。
@@ -346,6 +355,14 @@ mod tests {
     fn does_not_treat_short_words_as_codes() {
         // 纯字母码要求至少 5 位，避免 OK / PDF 之类误报。
         assert!(extract("confirmation code: OK", "").is_none());
+    }
+
+    #[test]
+    fn real_microsoft_security_code() {
+        // 微软用的是「安全代码」，不是「安全码」；少一个字就整封漏推。
+        let body = "个人 Microsoft 帐户 121@gmail.com 使用以下安全代码。\n\
+安全代码：237802\n如果你无法识别个人 Microsoft 帐户";
+        assert_eq!(extract("", body).expect("应提取到验证码").value, "237802");
     }
 
     #[test]

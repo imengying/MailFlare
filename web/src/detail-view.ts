@@ -14,16 +14,12 @@ import { senderInitial, senderTone } from "./sender.ts";
 import { emptyState } from "./ui.ts";
 
 export interface DetailHandlers {
-  /** 切换 HTML / 纯文本。 */
-  onTabChange(tab: "html" | "text"): void;
   /** 用户点了「显示图片」。 */
   onAllowImages(): void;
   /** 标为未读。 */
   onMarkUnread(id: string): void;
   /** 删除。 */
   onDelete(id: string): void;
-  /** 复制 Message-ID（复制动作本身由调用方实现）。 */
-  onCopyMessageId(messageId: string): void;
   /** 复制验证码（复制动作本身由调用方实现）。 */
   onCopyOtp(code: string): void;
 }
@@ -127,7 +123,7 @@ function buildActions(detail: EmailDetail, handlers: DetailHandlers): HTMLElemen
   return actions;
 }
 
-/** 渲染正文与附件（可重复调用，用于切换 tab / 放开图片）。 */
+/** 渲染正文与附件（可重复调用，用于放开图片后重绘）。 */
 export function renderDetailBody(state: AppState, handlers: DetailHandlers): void {
   const detail = state.detail;
   const pane = document.querySelector<HTMLElement>("#detail-pane");
@@ -136,48 +132,31 @@ export function renderDetailBody(state: AppState, handlers: DetailHandlers): voi
   // 只替换 body-wrap，保留头部，避免切换 tab 时头部闪一下。
   pane.querySelectorAll(".body-wrap").forEach((node) => node.remove());
 
-  // 只有纯文本时，选中态也必须落在纯文本上。
-  const activeTab = detail.html_body ? state.activeTab : "text";
   const wrap = create("div", { className: "body-wrap" });
-  wrap.append(buildBodyToolbar(detail, activeTab, handlers));
+  const bar = buildBodyToolbar(state, detail, handlers);
+  if (bar) wrap.append(bar);
   wrap.append(buildBody(state, handlers));
   wrap.append(...buildAttachments(detail));
   pane.append(wrap);
 }
 
-/** 正文格式切换与辅助操作，和邮件操作分开，减少头部按钮数量。 */
+/**
+ * 正文上方的工具栏。
+ *
+ * 已去掉「HTML / 纯文本」切换与「复制 Message-ID」：格式由后端字段决定，
+ * 用户不需要也不关心。这里只剩下「显示图片」提示，没内容时返回 null。
+ */
 function buildBodyToolbar(
+  state: AppState,
   detail: EmailDetail,
-  activeTab: "html" | "text",
   handlers: DetailHandlers,
-): HTMLElement {
+): HTMLElement | null {
+  if (!detail.html_body) return null;
   const bar = create("div", { className: "body-toolbar" });
-  if (detail.text_body || detail.html_body) {
-    const tabs = create("div", { className: "tabs", role: "tablist", ariaLabel: "正文格式" });
-    for (const [tab, label, iconName] of [["html", "HTML", "code"], ["text", "纯文本", "type"]] as const) {
-      const button = create("button", {
-        className: `tab${activeTab === tab ? " active" : ""}`,
-        type: "button",
-        role: "tab",
-      });
-      button.setAttribute("aria-selected", String(activeTab === tab));
-      button.textContent = label;
-      button.prepend(icon(iconName));
-      button.addEventListener("click", () => {
-        if (activeTab !== tab) handlers.onTabChange(tab);
-      });
-      tabs.append(button);
-    }
-    bar.append(tabs);
+  if (hasRemoteImages(detail.html_body) && !state.allowRemoteImages) {
+    bar.append(buildImageBar(handlers));
   }
-  if (detail.message_id) {
-    const messageId = detail.message_id;
-    const copy = create("button", { className: "btn sm ghost", type: "button", textContent: "复制 Message-ID", title: messageId });
-    copy.prepend(icon("copy"));
-    copy.addEventListener("click", () => handlers.onCopyMessageId(messageId));
-    bar.append(copy);
-  }
-  return bar;
+  return bar.childElementCount > 0 ? bar : null;
 }
 
 /** 正文区域。 */
@@ -186,7 +165,8 @@ function buildBody(state: AppState, handlers: DetailHandlers): HTMLElement {
   const box = create("div", { className: "body-scroll" });
   if (!detail) return box;
 
-  if (state.activeTab === "html" && detail.html_body) {
+  // 默认就是 HTML；没有 HTML 的邮件（纯文本信、解析失败）才退回纯文本。
+  if (detail.html_body) {
     if (!state.allowRemoteImages && hasRemoteImages(detail.html_body)) {
       box.append(buildImageBar(handlers));
     }

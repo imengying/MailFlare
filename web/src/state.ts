@@ -19,9 +19,6 @@ export type MutableEmail = { -readonly [K in keyof EmailSummary]: EmailSummary[K
 /** 列表筛选维度。 */
 export type Filter = "all" | "unread";
 
-/** 正文视图。 */
-export type BodyTab = "html" | "text";
-
 export interface AppState {
   token: string;
   filter: Filter;
@@ -36,7 +33,6 @@ export interface AppState {
   loadingMore: boolean;
   /** 前端本地过滤关键词（不查后端）。 */
   search: string;
-  activeTab: BodyTab;
   /** 是否允许加载远程图片（默认禁止，防追踪像素）。 */
   allowRemoteImages: boolean;
   settings: SettingsView | null;
@@ -54,7 +50,6 @@ export function createState(): AppState {
     loadingList: false,
     loadingMore: false,
     search: "",
-    activeTab: "html",
     allowRemoteImages: false,
     settings: null,
   };
