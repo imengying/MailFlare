@@ -116,7 +116,7 @@ export interface AuthConfig {
 /**
  * 后台设置（脱敏视图），对应 Rust 的 `SettingsView`。
  *
- * 后端**永不**返回密钥明文，只回传 `*_set` 与 `*_hint`。
+ * 后端**永不**返回密钥明文，只回传 `*_set` 表示是否已配置。
  */
 export interface SettingsView {
   readonly site_name: string;
@@ -125,21 +125,16 @@ export interface SettingsView {
   readonly site_background: string;
   readonly turnstile_site_key: string;
   readonly turnstile_secret_set: boolean;
-  readonly turnstile_secret_hint: string;
   readonly telegram_enabled: boolean;
   readonly telegram_bot_token_set: boolean;
-  readonly telegram_bot_token_hint: string;
   readonly telegram_chat_id: string;
   readonly bark_enabled: boolean;
   readonly bark_server: string;
   readonly bark_device_key_set: boolean;
-  readonly bark_device_key_hint: string;
   // ---- R2（S3 API）----
   readonly r2_account_id: string;
   readonly r2_access_key_id_set: boolean;
-  readonly r2_access_key_id_hint: string;
   readonly r2_secret_access_key_set: boolean;
-  readonly r2_secret_access_key_hint: string;
   readonly r2_bucket: string;
   /** 发件人黑名单：`a@b.com` / `@b.com` / `b.com` 三种写法。 */
   readonly blocked_senders: readonly string[];

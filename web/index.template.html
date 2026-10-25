@@ -340,6 +340,16 @@
   .field.full { grid-column: 1 / -1; }
   .notification-grid { display: grid; gap: 16px; }
   .notification-channel { min-width: 0; padding: 17px; border: 1px solid var(--border); border-radius: 12px; background: linear-gradient(140deg, var(--accent-wash), transparent 60%), var(--surface-2); }
+  .push-test { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--border); }
+  .push-test-hint { color: var(--text-faint); font-size: 12px; }
+  .push-test-result { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  .push-test-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+  .push-test-row .dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; }
+  .push-test-row.ok .dot { background: var(--ok); }
+  .push-test-row.failed .dot { background: var(--danger); }
+  .push-test-row.skipped .dot { background: var(--text-faint); }
+  .push-test-row .name { font-weight: 600; color: var(--text); }
+  .push-test-row .msg { color: var(--text-dim); }
   .channel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 17px; }
   .channel-title { display: flex; align-items: center; gap: 8px; }
   .channel-title .icon { width: 17px; height: 17px; color: var(--accent); }
@@ -630,6 +640,11 @@
                       <input class="input" id="bark-key" type="password" autocomplete="off" placeholder="设备 Key">
                     </div>
                   </div>
+                </div>
+                <div class="push-test">
+                  <button class="btn sm" type="button" id="test-push">发送测试通知</button>
+                  <span class="push-test-hint">测的是已保存的配置，改完请先保存。</span>
+                  <div class="push-test-result" id="test-push-result" hidden></div>
                 </div>
               </div>
             </section>

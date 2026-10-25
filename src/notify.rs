@@ -306,6 +306,43 @@ async fn push_bark(ctx: &PushContext<'_>) -> ChannelResult {
     .await
 }
 
+/// 测试推送用的文本。
+///
+/// 刻意复用真实格式（`🔑 验证码：xxx`），发出去看到的样子就是真邮件推送的样子；
+/// 验证码用固定值，一眼能认出这是测试消息。
+fn test_telegram_text() -> String {
+    format!(
+        "🔑 *{}：`{}`*\n\n*来自*：{}\n*主题*：{}",
+        "验证码",
+        "123456",
+        escape_markdown_v2("MailFlare 测试"),
+        escape_markdown_v2("这是一条测试推送，收到即表示配置正确")
+    )
+}
+
+/// 测试推送：给每个已启用的渠道发一条固定消息，并回报各自结果。
+///
+/// 和 `dispatch` 的区别：这里**不做验证码过滤**，也不并发——串行更好定位
+/// 到底是哪个渠道失败。返回明细给设置页展示，用户不用去翻日志。
+pub async fn test_push(settings: &Settings) -> (ChannelResult, ChannelResult) {
+    let telegram = if settings.telegram_enabled {
+        send_telegram_text(settings, test_telegram_text()).await
+    } else {
+        ChannelResult::Skipped
+    };
+    let bark = if settings.bark_enabled {
+        send_bark_text(
+            settings,
+            "🔑 验证码 123456".to_string(),
+            "MailFlare 测试推送\n收到即表示配置正确".to_string(),
+        )
+        .await
+    } else {
+        ChannelResult::Skipped
+    };
+    (telegram, bark)
+}
+
 /// 并发推送两个渠道。
 pub async fn dispatch(ctx: &PushContext<'_>) {
     let (telegram, bark) = futures_util::join!(push_telegram(ctx), push_bark(ctx));

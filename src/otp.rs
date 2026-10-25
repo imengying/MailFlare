@@ -29,7 +29,14 @@ const KEYWORDS: &[(&str, &str)] = &[
     ("security code", "安全码"),
     ("login code", "登录码"),
     ("one-time code", "验证码"),
+    ("one-time password", "验证码"),
+    ("one-time passcode", "验证码"),
     ("one time password", "验证码"),
+    ("temporary password", "临时密码"),
+    ("passcode", "验证码"),
+    ("access code", "验证码"),
+    ("authentication code", "验证码"),
+    ("sign-in code", "登录码"),
     // 泛用词放最后：Apple ID Code、login code 这类都靠它兜底。
     ("code", "验证码"),
     ("otp", "验证码"),
@@ -363,6 +370,39 @@ mod tests {
         let body = "个人 Microsoft 帐户 121@gmail.com 使用以下安全代码。\n\
 安全代码：237802\n如果你无法识别个人 Microsoft 帐户";
         assert_eq!(extract("", body).expect("应提取到验证码").value, "237802");
+    }
+
+    #[test]
+    fn english_phrasings_are_covered() {
+        // 各家邮件里真实出现过的英文写法。
+        for (subject, body, want) in [
+            ("", "Your security code is 123456", "123456"),
+            ("", "Use the code below to verify: 123456", "123456"),
+            ("", "Your verification code is: 123456", "123456"),
+            ("", "Enter this code to sign in: 123456", "123456"),
+            ("", "Your passcode is 123456", "123456"),
+            ("", "Here is your sign-in code: 123456", "123456"),
+            ("", "Your access code is 123456", "123456"),
+            ("", "Your authentication code is 123456", "123456"),
+            ("", "Your temporary password is 123456", "123456"),
+            ("", "Please enter the verification code sent to your phone: 123456", "123456"),
+            // 验证码在主题、关键词在正文的常见写法。
+            ("123456 is your verification code", "", "123456"),
+        ] {
+            assert_eq!(
+                extract(subject, body).as_ref().map(|c| c.value.as_str()),
+                Some(want),
+                "{body} 应提取到 {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn english_false_positives_stay_rejected() {
+        // PIN 通常是 4 位，按「不猜 4 位」的规则本就不识别。
+        assert!(extract("", "Your PIN is 1234").is_none());
+        // 没有关键词锚定时不能瞎猜，否则正文里任意数字都会被当成验证码。
+        assert!(extract("", "Use 123456 to verify your email address").is_none());
     }
 
     #[test]

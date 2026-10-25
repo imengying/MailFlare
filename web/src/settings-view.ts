@@ -101,6 +101,90 @@ export function createSettingsController(
     if (opened) setDirty(true);
   });
 
+  // ---- 测试推送 ---------------------------------------------------------
+  // 用独立按钮而不是表单提交：测试不应触发保存，也不该改动 dirty 状态。
+  let testing = false;
+  const testResult = (): HTMLElement => el<HTMLElement>("#test-push-result");
+
+  const renderTestResult = (payload: {
+    channels: { name: string; status: string; message: string }[];
+    all_skipped: boolean;
+  }): void => {
+    const box = testResult();
+    box.replaceChildren();
+    box.hidden = false;
+
+    if (payload.all_skipped) {
+      const row = document.createElement("div");
+      row.className = "push-test-row skipped";
+      row.append(
+        Object.assign(document.createElement("span"), { className: "dot" }),
+        Object.assign(document.createElement("span"), {
+          className: "name",
+          textContent: "没有启用的渠道",
+        }),
+        Object.assign(document.createElement("span"), {
+          className: "msg",
+          textContent: "请先勾选 Telegram 或 Bark 并保存",
+        }),
+      );
+      box.append(row);
+      return;
+    }
+
+    for (const channel of payload.channels) {
+      const row = document.createElement("div");
+      row.className = `push-test-row ${channel.status}`;
+      row.append(
+        Object.assign(document.createElement("span"), { className: "dot" }),
+        Object.assign(document.createElement("span"), {
+          className: "name",
+          textContent: channel.name,
+        }),
+        Object.assign(document.createElement("span"), {
+          className: "msg",
+          textContent: channel.message,
+        }),
+      );
+      box.append(row);
+    }
+  };
+
+  const testButton = (): HTMLButtonElement => el<HTMLButtonElement>("#test-push");
+  testButton().addEventListener("click", () => {
+    if (testing) return;
+    testing = true;
+    const button = testButton();
+    button.disabled = true;
+    button.textContent = "发送中…";
+    testResult().hidden = true;
+
+    void (async () => {
+      try {
+        const payload = await api.request<{
+          channels: { name: string; status: string; message: string }[];
+          all_skipped: boolean;
+        }>("/api/settings/test-push", { method: "POST" });
+        renderTestResult(payload);
+      } catch (error) {
+        renderTestResult({
+          channels: [
+            {
+              name: "请求失败",
+              status: "failed",
+              message: error instanceof Error ? error.message : "未知错误",
+            },
+          ],
+          all_skipped: false,
+        });
+      } finally {
+        testing = false;
+        button.disabled = false;
+        button.textContent = "发送测试通知";
+      }
+    })();
+  });
+
   const setControlsDisabled = (disabled: boolean): void => {
     form().querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea").forEach((control) => {
       control.disabled = disabled;
@@ -114,15 +198,10 @@ export function createSettingsController(
    * 留空提交时后端会当成 `None`（保持不变），所以用户可以放心
    * 只改其它字段而不动密钥。
    */
-  const fillSecret = (
-    sel: string,
-    isSet: boolean,
-    hint: string,
-    fallback: string,
-  ): void => {
+  const fillSecret = (sel: string, isSet: boolean, fallback: string): void => {
     const input = text(sel);
     input.value = "";
-    input.placeholder = isSet ? `已设置（${hint}），留空表示不修改` : fallback;
+    input.placeholder = isSet ? "已设置，留空表示不修改" : fallback;
   };
 
   /** 把服务端配置填进表单。 */
@@ -135,7 +214,6 @@ export function createSettingsController(
     fillSecret(
       "#ts-secret",
       settings.turnstile_secret_set,
-      settings.turnstile_secret_hint,
       "0x4AAA...",
     );
 
@@ -144,7 +222,6 @@ export function createSettingsController(
     fillSecret(
       "#tg-token",
       settings.telegram_bot_token_set,
-      settings.telegram_bot_token_hint,
       "123456:ABC-DEF...",
     );
 
@@ -153,7 +230,6 @@ export function createSettingsController(
     fillSecret(
       "#bark-key",
       settings.bark_device_key_set,
-      settings.bark_device_key_hint,
       "设备 Key",
     );
 
@@ -163,13 +239,11 @@ export function createSettingsController(
     fillSecret(
       "#r2-access-key",
       settings.r2_access_key_id_set,
-      settings.r2_access_key_id_hint,
       "R2 API 令牌的 Access Key ID",
     );
     fillSecret(
       "#r2-secret-key",
       settings.r2_secret_access_key_set,
-      settings.r2_secret_access_key_hint,
       "R2 API 令牌的 Secret Access Key",
     );
 

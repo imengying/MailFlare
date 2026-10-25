@@ -140,6 +140,10 @@ async fn route(req: &mut Request, ctx: &ApiCtx<'_>, path: &str) -> AppResult<Res
             let changed = db::mark_all_read(&db).await?;
             Ok(ok_json(&serde_json::json!({ "updated": changed })))
         }
+        "/api/settings/test-push" => {
+            require_method(&method, worker::Method::Post)?;
+            test_push(ctx).await
+        }
         "/api/settings" => match method {
             worker::Method::Get => get_settings(ctx).await,
             worker::Method::Put => put_settings(req, ctx).await,
@@ -662,6 +666,54 @@ async fn get_attachment(req: &Request, ctx: &ApiCtx<'_>, object_id: &str) -> App
 // ===========================================================================
 // 设置
 // ===========================================================================
+
+/// 单个渠道的测试结果，直接给前端展示。
+#[derive(Serialize)]
+struct TestPushChannel {
+    name: &'static str,
+    /// `ok` / `skipped` / `failed`
+    status: &'static str,
+    message: String,
+}
+
+fn describe(name: &'static str, result: crate::notify::ChannelResult) -> TestPushChannel {
+    use crate::notify::ChannelResult;
+    match result {
+        ChannelResult::Ok => TestPushChannel {
+            name,
+            status: "ok",
+            message: "已发送，请查看客户端".into(),
+        },
+        ChannelResult::Skipped => TestPushChannel {
+            name,
+            status: "skipped",
+            message: "未启用，已跳过".into(),
+        },
+        ChannelResult::Failed(message) => TestPushChannel {
+            name,
+            status: "failed",
+            message,
+        },
+    }
+}
+
+/// 发送测试推送。
+///
+/// 用 `ctx.settings`（dispatch 已读过库），所以测的是**保存后**的配置。
+/// 前端若改了表单还没保存，这里测不到新值——按钮旁有说明。
+async fn test_push(ctx: &ApiCtx<'_>) -> AppResult<Response> {
+    let (telegram, bark) = crate::notify::test_push(ctx.settings).await;
+    let channels = [
+        describe("Telegram", telegram),
+        describe("Bark", bark),
+    ];
+    // 两个都没启用时提示用户，而不是返回一个「成功但什么都没发」的假结果。
+    let all_skipped = channels.iter().all(|c| c.status == "skipped");
+    Ok(ok_json(&serde_json::json!({
+        "channels": channels,
+        "all_skipped": all_skipped,
+    })))
+}
 
 async fn get_settings(ctx: &ApiCtx<'_>) -> AppResult<Response> {
     // dispatch() 已经把设置读进 ctx.settings，这里直接用，不再查一次库。

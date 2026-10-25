@@ -200,20 +200,15 @@ impl Settings {
             site_background: &self.site_background,
             turnstile_site_key: &self.turnstile_site_key,
             turnstile_secret_set: !self.turnstile_secret.is_empty(),
-            turnstile_secret_hint: hint(&self.turnstile_secret),
             telegram_enabled: self.telegram_enabled,
             telegram_bot_token_set: !self.telegram_bot_token.is_empty(),
-            telegram_bot_token_hint: hint(&self.telegram_bot_token),
             telegram_chat_id: &self.telegram_chat_id,
             bark_enabled: self.bark_enabled,
             bark_server: &self.bark_server,
             bark_device_key_set: !self.bark_device_key.is_empty(),
-            bark_device_key_hint: hint(&self.bark_device_key),
             r2_account_id: &self.r2_account_id,
             r2_access_key_id_set: !self.r2_access_key_id.is_empty(),
-            r2_access_key_id_hint: hint(&self.r2_access_key_id),
             r2_secret_access_key_set: !self.r2_secret_access_key.is_empty(),
-            r2_secret_access_key_hint: hint(&self.r2_secret_access_key),
             r2_bucket: &self.r2_bucket,
             blocked_senders: &self.blocked_senders,
             allowed_recipients: &self.allowed_recipients,
@@ -234,20 +229,15 @@ pub struct SettingsView<'a> {
     pub site_background: &'a str,
     pub turnstile_site_key: &'a str,
     pub turnstile_secret_set: bool,
-    pub turnstile_secret_hint: &'a str,
     pub telegram_enabled: bool,
     pub telegram_bot_token_set: bool,
-    pub telegram_bot_token_hint: &'a str,
     pub telegram_chat_id: &'a str,
     pub bark_enabled: bool,
     pub bark_server: &'a str,
     pub bark_device_key_set: bool,
-    pub bark_device_key_hint: &'a str,
     pub r2_account_id: &'a str,
     pub r2_access_key_id_set: bool,
-    pub r2_access_key_id_hint: &'a str,
     pub r2_secret_access_key_set: bool,
-    pub r2_secret_access_key_hint: &'a str,
     pub r2_bucket: &'a str,
     pub blocked_senders: &'a [String],
     pub allowed_recipients: &'a [String],
@@ -354,19 +344,6 @@ pub fn merge_secret(slot: &mut String, patch: Option<String>) {
     }
 }
 
-fn hint(secret: &str) -> &str {
-    if secret.is_empty() {
-        ""
-    } else if secret.len() <= 8 {
-        "****"
-    } else {
-        // 按**字符**取最后 4 个，避免切坏多字节字符。
-        match secret.char_indices().rev().nth(3) {
-            Some((idx, _)) => &secret[idx..],
-            None => "****",
-        }
-    }
-}
 
 // ===========================================================================
 // configs 表读写

@@ -913,7 +913,7 @@ mod settings_normalize {
     }
 
     #[test]
-    fn redacted_hides_secrets_but_shows_tail() {
+    fn redacted_only_exposes_set_flags() {
         let s = Settings {
             turnstile_secret: "0xSECRETVALUE".into(),
             telegram_bot_token: "123456:ABCdefGHIjkl".into(),
@@ -924,11 +924,11 @@ mod settings_normalize {
 
         assert!(view.turnstile_secret_set);
         assert!(view.telegram_bot_token_set);
-        // 长密钥只露最后 4 个字符。
-        assert_eq!(view.telegram_bot_token_hint, "Ijkl");
-        // 短密钥整体打码，不泄露任何字符。
-        assert_eq!(view.bark_device_key_hint, "****");
-        // 视图里根本没有明文密钥字段——这是编译期保证的。
+        assert!(view.bark_device_key_set);
+        // 空密钥必须显示为「未设置」。
+        assert!(!view.r2_secret_access_key_set);
+        // 视图里既没有明文密钥，也没有任何尾部提示——尾部字符同样属于泄露，
+        // 位数够短时（如长度 8 以下）基本等于把整个密钥交出去。
     }
 
     #[test]
