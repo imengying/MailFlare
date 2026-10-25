@@ -130,9 +130,6 @@ export interface SettingsView {
   readonly telegram_enabled: boolean;
   readonly telegram_bot_token_set: boolean;
   readonly telegram_chat_id: string;
-  readonly bark_enabled: boolean;
-  readonly bark_server: string;
-  readonly bark_device_key_set: boolean;
   // ---- R2（S3 API）----
   readonly r2_account_id: string;
   readonly r2_access_key_id_set: boolean;
@@ -166,9 +163,6 @@ export interface SettingsPatch {
   telegram_enabled?: boolean;
   telegram_bot_token?: string;
   telegram_chat_id?: string;
-  bark_enabled?: boolean;
-  bark_server?: string;
-  bark_device_key?: string;
   r2_account_id?: string;
   r2_access_key_id?: string;
   r2_secret_access_key?: string;

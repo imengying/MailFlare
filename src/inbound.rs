@@ -357,11 +357,11 @@ fn spawn_push(env: &Env, ctx: Context, email: db::EmailDetail, settings: Setting
 
     // 设置已在收信入口读过，直接复用，省掉一次 D1 往返。
     ctx.wait_until(async move {
-        // 两个渠道都没开就不必再构造消息了。
-        if !settings.telegram_enabled && !settings.bark_enabled {
+        // 渠道没开就不必再构造消息了。
+        if !settings.telegram_enabled {
             // 有验证码却没推送：多半是设置没读到（load_settings 失败会退回默认值，
-            // 默认两个渠道都是关的）。这条日志能把这个隐形失败显出来。
-            console_log!("[mailflare] 提取到验证码 {code_value}（{id}），但两个推送渠道都未启用");
+            // 默认渠道是关的）。这条日志能把这个隐形失败显出来。
+            console_log!("[mailflare] 提取到验证码 {code_value}（{id}），但推送渠道未启用");
             if let Some(db) = &log_db {
                 let _ = crate::db::set_push_status(db, &id, "failed").await;
                 notify::record_push_log(
@@ -371,7 +371,6 @@ fn spawn_push(env: &Env, ctx: Context, email: db::EmailDetail, settings: Setting
                         subject,
                         code: code_value,
                         ok: false,
-                        channels: vec!["两个推送渠道都未启用".to_string()],
                     },
                 )
                 .await;
@@ -384,8 +383,7 @@ fn spawn_push(env: &Env, ctx: Context, email: db::EmailDetail, settings: Setting
             settings: &settings,
             email: &push_email,
         };
-        let channels = notify::dispatch(&ctx).await;
-        let ok = channels.iter().all(|c| c.ends_with("ok"));
+        let ok = notify::dispatch(&ctx).await;
         // 两处落库：
         // - emails.push_status：详情页时间后面直接显示「已推送 / 推送失败」
         // - configs.last_push：保存完整原因，设置页可查
@@ -401,7 +399,6 @@ fn spawn_push(env: &Env, ctx: Context, email: db::EmailDetail, settings: Setting
                     subject,
                     code: code_value,
                     ok,
-                    channels,
                 },
             )
             .await;

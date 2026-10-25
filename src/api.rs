@@ -706,12 +706,9 @@ fn describe(name: &'static str, result: crate::notify::ChannelResult) -> TestPus
 /// 用 `ctx.settings`（dispatch 已读过库），所以测的是**保存后**的配置。
 /// 前端若改了表单还没保存，这里测不到新值——按钮旁有说明。
 async fn test_push(ctx: &ApiCtx<'_>) -> AppResult<Response> {
-    let (telegram, bark) = crate::notify::test_push(ctx.settings).await;
-    let channels = [
-        describe("Telegram", telegram),
-        describe("Bark", bark),
-    ];
-    // 两个都没启用时提示用户，而不是返回一个「成功但什么都没发」的假结果。
+    let telegram = crate::notify::test_push(ctx.settings).await;
+    let channels = [describe("Telegram", telegram)];
+    // 没启用时提示用户，而不是返回一个「成功但什么都没发」的假结果。
     let all_skipped = channels.iter().all(|c| c.status == "skipped");
     Ok(ok_json(&serde_json::json!({
         "channels": channels,
@@ -790,9 +787,6 @@ struct SettingsPatch {
     telegram_bot_token: Option<String>,
     telegram_chat_id: Option<String>,
 
-    bark_enabled: Option<bool>,
-    bark_server: Option<String>,
-    bark_device_key: Option<String>,
 
     r2_account_id: Option<String>,
     r2_access_key_id: Option<String>,
@@ -835,7 +829,7 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
 
     // 布尔与数值：有值就覆盖。
     apply!(patch => settings;
-        telegram_enabled, bark_enabled,
+        telegram_enabled,
         max_body_bytes, max_message_bytes, max_attachment_bytes, r2_concurrency,
         page_size_default, page_size_max,
     );
@@ -844,7 +838,7 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
     apply!(patch => settings;
         site_name, site_logo, site_background,
         turnstile_site_key,
-        telegram_chat_id, bark_server,
+        telegram_chat_id,
         r2_account_id, r2_bucket,
     );
 
@@ -852,7 +846,6 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
     // 空串是有意义的（表示清空），所以要保留。
     config::merge_secret(&mut settings.turnstile_secret, patch.turnstile_secret);
     config::merge_secret(&mut settings.telegram_bot_token, patch.telegram_bot_token);
-    config::merge_secret(&mut settings.bark_device_key, patch.bark_device_key);
     config::merge_secret(&mut settings.r2_access_key_id, patch.r2_access_key_id);
     config::merge_secret(&mut settings.r2_secret_access_key, patch.r2_secret_access_key);
 
@@ -882,22 +875,11 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
             return Err(AppError::BadRequest(format!("{label}地址格式不合法")));
         }
     }
-    if !settings.bark_server.starts_with("https://") && !settings.bark_server.starts_with("http://")
-    {
-        return Err(AppError::BadRequest(
-            "Bark 服务地址必须以 http:// 或 https:// 开头".into(),
-        ));
-    }
     if settings.telegram_enabled
         && (settings.telegram_bot_token.is_empty() || settings.telegram_chat_id.is_empty())
     {
         return Err(AppError::BadRequest(
             "启用 Telegram 推送必须同时填写 Bot Token 与 Chat ID".into(),
-        ));
-    }
-    if settings.bark_enabled && settings.bark_device_key.is_empty() {
-        return Err(AppError::BadRequest(
-            "启用 Bark 推送必须填写 Device Key".into(),
         ));
     }
     if let Some(bad) = settings

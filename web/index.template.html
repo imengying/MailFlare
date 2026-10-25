@@ -363,7 +363,7 @@
   #app-view.settings-open .split { grid-template-columns: minmax(0, 1fr); }
   #app-view.settings-open #settings-view { grid-column: 1 / -1; }
   @media (min-width: 1200px) {
-    .settings-grid.two-column, .notification-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .settings-grid.two-column { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
 
   #toast { position: fixed; left: 50%; bottom: max(28px, env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(10px); background: var(--text); color: var(--surface); padding: 11px 18px; border: 1px solid color-mix(in srgb, var(--text) 75%, var(--surface)); border-radius: 12px; font-size: 13px; box-shadow: var(--shadow-lg); opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; z-index: 60; max-width: min(480px, 90vw); text-align: center; }
@@ -622,20 +622,6 @@
                     <div class="field">
                       <label for="tg-chat">Chat ID</label>
                       <input class="input" id="tg-chat" autocomplete="off" placeholder="123456789">
-                                          </div>
-                  </div>
-                  <div class="notification-channel">
-                    <div class="channel-head">
-                      <div class="channel-title"><span data-icon="bell"></span><h4>Bark</h4></div>
-                      <div class="switch"><input type="checkbox" id="bark-enabled"><label for="bark-enabled">启用</label></div>
-                    </div>
-                    <div class="field">
-                      <label for="bark-server">服务地址</label>
-                      <input class="input" id="bark-server" autocomplete="off" placeholder="https://api.day.app">
-                    </div>
-                    <div class="field">
-                      <label for="bark-key">Device Key</label>
-                      <input class="input" id="bark-key" type="password" autocomplete="off" placeholder="设备 Key">
                     </div>
                   </div>
                 </div>

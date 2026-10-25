@@ -169,11 +169,14 @@ export function createSettingsController(
     box.replaceChildren();
     box.hidden = false;
 
-    const when = new Date(log.at * 1000).toLocaleString("zh-CN", { hour12: false });
-    box.append(resultRow(log.ok ? "ok" : "failed", `${when} 收到验证码 ${log.code}`));
+    // 只展示成功的结果。失败原因对普通使用没有意义（绝大多数是渠道侧
+    // 网络问题，用户也改不了），留着只会堆噪音。
     if (!log.ok) {
-      for (const line of log.channels) box.append(resultRow("failed", line));
+      box.hidden = true;
+      return;
     }
+    const when = new Date(log.at * 1000).toLocaleString("zh-CN", { hour12: false });
+    box.append(resultRow("ok", `${when} 收到验证码 ${log.code}`));
   };
 
   void (async () => {
@@ -258,14 +261,6 @@ export function createSettingsController(
       "123456:ABC-DEF...",
     );
 
-    check("#bark-enabled").checked = settings.bark_enabled;
-    text("#bark-server").value = settings.bark_server;
-    fillSecret(
-      "#bark-key",
-      settings.bark_device_key_set,
-      "设备 Key",
-    );
-
     // R2：账号 ID 与桶名是明文，回填；两个密钥只更新 placeholder。
     text("#r2-account").value = settings.r2_account_id;
     text("#r2-bucket").value = settings.r2_bucket;
@@ -316,8 +311,6 @@ export function createSettingsController(
       turnstile_site_key: text("#ts-site-key").value.trim(),
       telegram_enabled: check("#tg-enabled").checked,
       telegram_chat_id: text("#tg-chat").value.trim(),
-      bark_enabled: check("#bark-enabled").checked,
-      bark_server: text("#bark-server").value.trim(),
       r2_account_id: text("#r2-account").value.trim(),
       r2_bucket: text("#r2-bucket").value.trim(),
       blocked_senders: parseList(area("#blocked-senders").value),
@@ -330,9 +323,6 @@ export function createSettingsController(
 
     const tgToken = text("#tg-token").value.trim();
     if (tgToken) patch.telegram_bot_token = tgToken;
-
-    const barkKey = text("#bark-key").value.trim();
-    if (barkKey) patch.bark_device_key = barkKey;
 
     const r2AccessKey = text("#r2-access-key").value.trim();
     if (r2AccessKey) patch.r2_access_key_id = r2AccessKey;

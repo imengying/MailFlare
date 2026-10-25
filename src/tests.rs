@@ -843,26 +843,16 @@ mod settings_normalize {
     use crate::config::Settings;
 
     #[test]
-    fn trims_and_strips_trailing_slash() {
+    fn trims_site_fields() {
         let s = Settings {
             turnstile_site_key: "  0xABC  ".into(),
-            bark_server: "https://api.day.app/".into(),
+            site_name: "  MailFlare  ".into(),
             ..Default::default()
         }
         .normalized();
 
         assert_eq!(s.turnstile_site_key, "0xABC");
-        assert_eq!(s.bark_server, "https://api.day.app");
-    }
-
-    #[test]
-    fn empty_bark_server_falls_back_to_default() {
-        let s = Settings {
-            bark_server: "   ".into(),
-            ..Default::default()
-        }
-        .normalized();
-        assert_eq!(s.bark_server, "https://api.day.app");
+        assert_eq!(s.site_name, "MailFlare");
     }
 
     #[test]
@@ -917,14 +907,14 @@ mod settings_normalize {
         let s = Settings {
             turnstile_secret: "0xSECRETVALUE".into(),
             telegram_bot_token: "123456:ABCdefGHIjkl".into(),
-            bark_device_key: "short".into(),
+            r2_access_key_id: "AKID".into(),
             ..Default::default()
         };
         let view = s.redacted();
 
         assert!(view.turnstile_secret_set);
         assert!(view.telegram_bot_token_set);
-        assert!(view.bark_device_key_set);
+        assert!(view.r2_access_key_id_set);
         // 空密钥必须显示为「未设置」。
         assert!(!view.r2_secret_access_key_set);
         // 视图里既没有明文密钥，也没有任何尾部提示——尾部字符同样属于泄露，
@@ -937,7 +927,7 @@ mod settings_normalize {
         let s: Settings = serde_json::from_str(r#"{"site_name":"OnlyName"}"#).unwrap();
         assert_eq!(s.site_name, "OnlyName");
         assert_eq!(s.page_size_default, 20);
-        assert_eq!(s.bark_server, "https://api.day.app");
+        assert_eq!(s.page_size_max, 100);
     }
 }
 
@@ -988,13 +978,13 @@ mod settings_patch {
 
     #[test]
     fn normalization_applies_after_merge() {
-        // 合并后要跑一遍归一化：空格与尾斜杠都得处理掉。
+        // 合并后要跑一遍归一化：首尾空格必须去掉。
         let settings = Settings {
-            bark_server: "  https://api.day.app/ ".into(),
+            telegram_chat_id: "  123456  ".into(),
             ..Default::default()
         }
         .normalized();
-        assert_eq!(settings.bark_server, "https://api.day.app");
+        assert_eq!(settings.telegram_chat_id, "123456");
     }
 }
 

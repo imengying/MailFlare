@@ -1,4 +1,4 @@
-//! 新邮件推送：Telegram Bot 与 Bark。
+//! 新邮件推送：Telegram Bot。
 //!
 //! 跑在 `wait_until()` 里，两个渠道并发、各自带超时，失败只记日志。
 
@@ -37,39 +37,6 @@ pub enum ChannelResult {
     Skipped,
     Ok,
     Failed(String),
-}
-
-/// 从 HTML 错误页里抠出<title>和 Cloudflare 错误码。
-///
-/// 拦截页前几百个字符全是 IE 条件注释和 CSS，直接截断只会得到一堆噪音。
-/// 真正有用的是标题（`Attention Required! | Cloudflare`）和错误码
-/// （1010 = 浏览器签名被拒），这两个一出来就能定位问题。
-fn html_error_summary(html: &str) -> Option<String> {
-    let pick = |start: &str, end: &str| -> Option<String> {
-        let from = html.find(start)? + start.len();
-        let to = html[from..].find(end)? + from;
-        Some(html[from..to].trim().to_string())
-    };
-
-    // 错误码在 <span class="cf-error-code">error code: 1010</span> 里。
-    // 起点要越过 class 属性的引号尖括号，直接定位到内容开始处。
-    let code = pick("cf-error-code", "</span>")
-        .map(|rest| rest.trim_start_matches(['"', '>', ' ']).to_string())
-        .filter(|s| !s.is_empty());
-    let title = pick("<title>", "</title>");
-
-    let mut parts = Vec::new();
-    if let Some(t) = title.filter(|t| !t.is_empty()) {
-        parts.push(t);
-    }
-    if let Some(c) = code {
-        parts.push(format!("错误码 {c}"));
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("；"))
-    }
 }
 
 /// 压平换行，避免日志串行。
@@ -255,7 +222,7 @@ async fn post_telegram(
     if headers.set("content-type", "application/json").is_err() {
         return Err("构造请求头失败".into());
     }
-    // 与 Bark 一致：补普通客户端该有的头，避免被中间层当成脚本。
+    // 补普通客户端该有的头，避免被中间层当成脚本。
     let _ = headers.set("user-agent", "MailFlare/1.0");
     let _ = headers.set("accept", "application/json");
 
@@ -286,151 +253,12 @@ fn strip_markdown_escapes(input: &str) -> String {
     out
 }
 
-/// Bark v2 推送请求体。
-#[derive(Serialize)]
-struct BarkPayload<'a> {
-    device_key: &'a str,
-    title: String,
-    body: String,
-}
-
-/// 发送一条 Bark 消息。同样抽成原语供告警复用。
-async fn send_bark_text(settings: &Settings, title: String, body: String) -> ChannelResult {
-    if settings.bark_device_key.is_empty() {
-        return ChannelResult::Failed("Bark device key 未配置".into());
-    }
-
-    // 留一份原文：POST 被中间层拦截时要拿它走 GET 重试。
-    let (title_orig, body_orig) = (title.clone(), body.clone());
-
-    // 不带 `group`：这个字段可选，而多一个字段就等于多一条可能命中的
-    // WAF 规则（Bark 前面的 Cloudflare 对陌生 JSON 结构更敏感）。
-    let payload = BarkPayload {
-        device_key: &settings.bark_device_key,
-        title,
-        body,
-    };
-
-    // 统一走 POST {server}/push：对长文本与特殊字符最安全。
-    let Ok(url) = Url::parse(&format!("{}/push", settings.bark_server)) else {
-        return ChannelResult::Failed("Bark 服务地址非法".into());
-    };
-
-    let Ok(body) = serde_json::to_string(&payload) else {
-        return ChannelResult::Failed("Bark 请求体序列化失败".into());
-    };
-
-    let headers = worker::Headers::new();
-    if headers.set("content-type", "application/json").is_err() {
-        return ChannelResult::Failed("构造请求头失败".into());
-    }
-    // 给一个干净、稳定的 UA。刻意不伪装成 `Mozilla/5.0`：
-    // Worker 的出口 IP 与真实浏览器对不上，伪装反而可能被 Cloudflare 的
-    // 浏览器签名校验（错误码 1010）拦掉。
-    let _ = headers.set("user-agent", "MailFlare/1.0");
-    let _ = headers.set("accept", "application/json, */*");
-    let _ = headers.set("accept-language", "zh-CN,zh;q=0.9,en;q=0.8");
-
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post)
-        .with_headers(headers)
-        .with_body(Some(worker::wasm_bindgen::JsValue::from_str(&body)));
-
-    match fetch_with_timeout(url, init, PUSH_TIMEOUT).await {
-        Ok((200..=299, _)) => ChannelResult::Ok,
-        // 403 且响应体是 HTML：这是 Cloudflare 的拦截页，不是 Bark 的拒绝。
-        Ok((403, detail)) if detail.contains("<!DOCTYPE") || detail.contains("no-js") => {
-            // 拦截页带 "Attention Required" 且没有错误码时，是托管质询：
-            // 需要浏览器执行 JS 才能通过，Worker 的重试基本无望。
-            // 仍然给 GET 一次机会——它走另一条路由，成功率不高但不费事。
-            console_log!("[mailflare] Bark POST 被 Cloudflare 拦截，降级为 GET 重试");
-            let retry = send_bark_get(settings, &title_orig, &body_orig).await;
-            match retry {
-                ChannelResult::Ok => ChannelResult::Ok,
-                ChannelResult::Skipped => retry,
-                ChannelResult::Failed(_) => ChannelResult::Failed(
-                    // 两种方式都被拦：这不是配置错误，而是出口被质询。
-                    // 明确说清楚，免得用户反复去改 key。
-                    "Bark 返回 HTTP 403：请求被 Cloudflare 质询拦截（Worker 出口 IP 无法通过人机校验，与设备 Key 无关）"
-                        .to_string(),
-                ),
-            }
-        }
-        Ok((code, detail)) => {
-            // HTML 拦截页只提取标题和错误码，整页截断全是注释噪音。
-            let short = html_error_summary(&detail).unwrap_or_else(|| {
-                detail.trim().chars().take(160).collect()
-            });
-            if short.is_empty() {
-                ChannelResult::Failed(format!("Bark 返回 HTTP {code}"))
-            } else {
-                ChannelResult::Failed(format!("Bark 返回 HTTP {code}：{short}"))
-            }
-        }
-        Err(e) => ChannelResult::Failed(e),
-    }
-}
-
-/// Bark 的 GET 形式：`{server}/{device_key}/{title}/{body}`。
-///
-/// 作为 POST 被中间层拦截时的备用通道。官方文档两种都支持，
-/// GET 的参数在路径里，绕开了针对 JSON 请求体的风控规则。
-async fn send_bark_get(settings: &Settings, title: &str, body: &str) -> ChannelResult {
-    let title = crate::util::percent_encode(title);
-    let body = crate::util::percent_encode(body);
-    let Ok(url) = Url::parse(&format!(
-        "{}/{}/{}/{}",
-        settings.bark_server,
-        crate::util::percent_encode(&settings.bark_device_key),
-        title,
-        body
-    )) else {
-        return ChannelResult::Failed("Bark 服务地址非法".into());
-    };
-
-    let headers = worker::Headers::new();
-    let _ = headers.set("user-agent", "MailFlare/1.0");
-    let mut init = RequestInit::new();
-    init.with_method(Method::Get).with_headers(headers);
-
-    match fetch_with_timeout(url, init, PUSH_TIMEOUT).await {
-        Ok((200..=299, _)) => ChannelResult::Ok,
-        Ok((code, detail)) => {
-            let short = html_error_summary(&detail).unwrap_or_else(|| {
-                detail.trim().chars().take(160).collect()
-            });
-            if short.is_empty() {
-                ChannelResult::Failed(format!("Bark 返回 HTTP {code}（GET 重试也失败）"))
-            } else {
-                ChannelResult::Failed(format!("Bark 返回 HTTP {code}（GET 重试）：{short}"))
-            }
-        }
-        Err(e) => ChannelResult::Failed(format!("{e}（GET 重试）")),
-    }
-}
-
 /// 验证码的 Telegram 通知。
 async fn push_telegram(ctx: &PushContext<'_>) -> ChannelResult {
     if !ctx.settings.telegram_enabled {
         return ChannelResult::Skipped;
     }
     send_telegram_text(ctx.settings, telegram_text(ctx)).await
-}
-
-/// 验证码的 Bark 通知。
-async fn push_bark(ctx: &PushContext<'_>) -> ChannelResult {
-    let s = ctx.settings;
-    if !s.bark_enabled {
-        return ChannelResult::Skipped;
-    }
-
-    let code = &ctx.email.code;
-    send_bark_text(
-        s,
-        format!("🔑 {} {}", code.label, code.value),
-        format!("{}\n{}", short_sender(&ctx.email.sender), ctx.email.subject),
-    )
-    .await
 }
 
 /// 测试推送用的文本。
@@ -447,27 +275,15 @@ fn test_telegram_text() -> String {
     )
 }
 
-/// 测试推送：给每个已启用的渠道发一条固定消息，并回报各自结果。
+/// 测试推送：给 Telegram 发一条固定消息。
 ///
-/// 和 `dispatch` 的区别：这里**不做验证码过滤**，也不并发——串行更好定位
-/// 到底是哪个渠道失败。返回明细给设置页展示，用户不用去翻日志。
-pub async fn test_push(settings: &Settings) -> (ChannelResult, ChannelResult) {
-    let telegram = if settings.telegram_enabled {
+/// 和 `dispatch` 的区别：这里**不做验证码过滤**，方便随时确认配置是否可用。
+pub async fn test_push(settings: &Settings) -> ChannelResult {
+    if settings.telegram_enabled {
         send_telegram_text(settings, test_telegram_text()).await
     } else {
         ChannelResult::Skipped
-    };
-    let bark = if settings.bark_enabled {
-        send_bark_text(
-            settings,
-            "🔑 验证码 123456".to_string(),
-            "MailFlare 测试推送\n收到即表示配置正确".to_string(),
-        )
-        .await
-    } else {
-        ChannelResult::Skipped
-    };
-    (telegram, bark)
+    }
 }
 
 /// 最近一次推送结果的持久化形态。
@@ -481,9 +297,7 @@ pub struct PushLog {
     /// 触发的邮件主题，方便对上是哪一封。
     pub subject: String,
     pub code: String,
-    /// 每个渠道的结果，形如 `["telegram: ok", "bark: HTTP 400"]`。
-    pub channels: Vec<String>,
-    /// 是否全部成功。
+    /// 是否推送成功。
     pub ok: bool,
 }
 
@@ -505,26 +319,20 @@ pub async fn load_push_log(db: &worker::D1Database) -> Option<PushLog> {
     serde_json::from_str(&raw).ok()
 }
 
-/// 并发推送两个渠道，返回每个渠道的可读结果。
-pub async fn dispatch(ctx: &PushContext<'_>) -> Vec<String> {
-    let (telegram, bark) = futures_util::join!(push_telegram(ctx), push_bark(ctx));
-
-    let mut lines = Vec::new();
-    // 日志带上邮件 id，便于区分「没推」和「推失败」。
-    for (name, r) in [("telegram", &telegram), ("bark", &bark)] {
-        match r {
-            ChannelResult::Failed(msg) => {
-                console_error!("[mailflare] {name} 推送失败 ({}): {msg}", ctx.email.id);
-                lines.push(format!("{name}: {msg}"));
-            }
-            ChannelResult::Ok => {
-                console_log!("[mailflare] {name} 推送成功 ({})", ctx.email.id);
-                lines.push(format!("{name}: ok"));
-            }
-            ChannelResult::Skipped => {}
+/// 推送验证码，返回是否成功（`Skipped` 视为未成功）。
+pub async fn dispatch(ctx: &PushContext<'_>) -> bool {
+    match push_telegram(ctx).await {
+        // 日志带上邮件 id，便于区分「没推」和「推失败」。
+        ChannelResult::Failed(msg) => {
+            console_error!("[mailflare] telegram 推送失败 ({}): {msg}", ctx.email.id);
+            false
         }
+        ChannelResult::Ok => {
+            console_log!("[mailflare] telegram 推送成功 ({})", ctx.email.id);
+            true
+        }
+        ChannelResult::Skipped => false,
     }
-    lines
 }
 
 // ===========================================================================
@@ -566,8 +374,8 @@ impl InboundFailure {
 /// 收信失败时推送一条告警，避免「静默丢信」。
 ///
 /// ## 为什么只推给已启用的渠道
-/// 告警本身也依赖 Telegram/Bark 配置。如果两个渠道都没开，就只写日志——
-/// 这种情况下本来也没有可用的通知手段。
+/// 告警本身也依赖 Telegram 配置。没开就只写日志——这种情况下本来也没有
+/// 可用的通知手段。
 ///
 /// ## 为什么告警不计入正常推送的限流
 /// 告警是低频事件（只在实际出错时触发），不需要额外限流。
@@ -591,7 +399,7 @@ pub async fn alert_inbound_failure(
             return;
         }
     };
-    if !settings.telegram_enabled && !settings.bark_enabled {
+    if !settings.telegram_enabled {
         return;
     }
 
@@ -607,64 +415,12 @@ pub async fn alert_inbound_failure(
         size_mb,
         escape_markdown_v2(&detail),
     );
-    let bark_body = format!(
-        "{}\n发件人：{}\n大小：{:.2} MB\n{}",
-        failure.label(),
-        envelope_from,
-        size_mb,
-        detail
-    );
-
-    let (tg, bark) = futures_util::join!(
-        async {
-            if settings.telegram_enabled {
-                send_telegram_text(&settings, truncate_utf8(tg_text, TG_TEXT_LIMIT)).await
-            } else {
-                ChannelResult::Skipped
-            }
-        },
-        async {
-            if settings.bark_enabled {
-                send_bark_text(&settings, "⚠️ MailFlare 收信告警".to_string(), bark_body)
-                    .await
-            } else {
-                ChannelResult::Skipped
-            }
+    match send_telegram_text(&settings, truncate_utf8(tg_text, TG_TEXT_LIMIT)).await {
+        ChannelResult::Failed(msg) => {
+            console_error!("[mailflare] telegram 告警推送失败：{msg}")
         }
-    );
-
-    for (name, result) in [("telegram", &tg), ("bark", &bark)] {
-        match result {
-            ChannelResult::Failed(msg) => {
-                console_error!("[mailflare] {name} 告警推送失败：{msg}")
-            }
-            ChannelResult::Ok => console_log!("[mailflare] {name} 告警已发送：{}", failure.label()),
-            ChannelResult::Skipped => {}
-        }
-    }
-}
-
-#[cfg(test)]
-mod html_err {
-    use super::html_error_summary;
-
-    #[test]
-    fn extracts_title_and_code() {
-        // Cloudflare 1010 拦截页的典型结构。
-        let html = r#"<!DOCTYPE html>
-        <!--[if lt IE 7]> <html class="no-js ie6 oldie"> <![endif]-->
-        <head><title>Access denied | api.day.app used Cloudflare to restrict access</title></head>
-        <body><h1>Access denied</h1>
-        <span class="cf-error-code">error code: 1010</span></body></html>"#;
-        let got = html_error_summary(html).unwrap();
-        println!("=> {got}");
-        assert!(got.contains("Access denied"), "{got}");
-        assert!(got.contains("1010"), "{got}");
-    }
-
-    #[test]
-    fn returns_none_for_plain_text() {
-        assert!(html_error_summary("{\"code\":400}").is_none());
+        ChannelResult::Ok => console_log!("[mailflare] telegram 告警已发送：{}", failure.label()),
+        ChannelResult::Skipped => {}
     }
 }
 
