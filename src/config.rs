@@ -74,6 +74,11 @@ pub struct Settings {
     pub telegram_bot_token: String,
     pub telegram_chat_id: String,
 
+    // ---- Bark -----------------------------------------------------------
+    pub bark_enabled: bool,
+    pub bark_server: String,
+    pub bark_device_key: String,
+
     // ---- R2（S3 API）----
     /// 端点主机名是 `{account_id}.r2.cloudflarestorage.com`。
     pub r2_account_id: String,
@@ -112,6 +117,9 @@ impl Default for Settings {
             telegram_enabled: false,
             telegram_bot_token: String::new(),
             telegram_chat_id: String::new(),
+            bark_enabled: false,
+            bark_server: "https://api.day.app".to_string(),
+            bark_device_key: String::new(),
             r2_account_id: String::new(),
             r2_access_key_id: String::new(),
             r2_secret_access_key: String::new(),
@@ -130,6 +138,18 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// 服务地址可包含反向代理的路径前缀，但不能带查询参数或片段。
+    pub fn bark_server_valid(&self) -> bool {
+        url::Url::parse(&self.bark_server).is_ok_and(|url| {
+            matches!(url.scheme(), "http" | "https")
+                && url.has_host()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none()
+        })
+    }
+
     /// 归一化并夹紧取值范围，写库前调用。
     pub fn normalized(mut self) -> Self {
         self.site_name = self.site_name.trim().to_string();
@@ -142,6 +162,12 @@ impl Settings {
         self.turnstile_secret = self.turnstile_secret.trim().to_string();
         self.telegram_bot_token = self.telegram_bot_token.trim().to_string();
         self.telegram_chat_id = self.telegram_chat_id.trim().to_string();
+        self.bark_device_key = self.bark_device_key.trim().to_string();
+        self.bark_server = self.bark_server.trim().trim_end_matches('/').to_string();
+        if self.bark_server.is_empty() {
+            self.bark_server = "https://api.day.app".to_string();
+        }
+
         self.r2_account_id = self.r2_account_id.trim().to_string();
         self.r2_access_key_id = self.r2_access_key_id.trim().to_string();
         self.r2_secret_access_key = self.r2_secret_access_key.trim().to_string();
@@ -191,6 +217,9 @@ impl Settings {
             telegram_enabled: self.telegram_enabled,
             telegram_bot_token_set: !self.telegram_bot_token.is_empty(),
             telegram_chat_id: &self.telegram_chat_id,
+            bark_enabled: self.bark_enabled,
+            bark_server: &self.bark_server,
+            bark_device_key_set: !self.bark_device_key.is_empty(),
             r2_account_id: &self.r2_account_id,
             r2_access_key_id_set: !self.r2_access_key_id.is_empty(),
             r2_secret_access_key_set: !self.r2_secret_access_key.is_empty(),
@@ -217,6 +246,9 @@ pub struct SettingsView<'a> {
     pub telegram_enabled: bool,
     pub telegram_bot_token_set: bool,
     pub telegram_chat_id: &'a str,
+    pub bark_enabled: bool,
+    pub bark_server: &'a str,
+    pub bark_device_key_set: bool,
     pub r2_account_id: &'a str,
     pub r2_access_key_id_set: bool,
     pub r2_secret_access_key_set: bool,

@@ -856,6 +856,51 @@ mod settings_normalize {
     }
 
     #[test]
+    fn bark_normalizes_server_and_key() {
+        let s = Settings {
+            bark_server: "  https://example.com/bark///  ".into(),
+            bark_device_key: "  device-key  ".into(),
+            ..Default::default()
+        }
+        .normalized();
+        assert_eq!(s.bark_server, "https://example.com/bark");
+        assert_eq!(s.bark_device_key, "device-key");
+
+        let s = Settings {
+            bark_server: "   ".into(),
+            ..Default::default()
+        }
+        .normalized();
+        assert_eq!(s.bark_server, "https://api.day.app");
+    }
+
+    #[test]
+    fn bark_server_requires_an_http_base_url() {
+        for server in ["https://api.day.app", "http://example.com:8080", "https://example.com/bark"] {
+            let s = Settings { bark_server: server.into(), ..Default::default() };
+            assert!(s.bark_server_valid(), "{server}");
+        }
+        for server in ["https://", "ftp://example.com", "not-a-url", "https://example.com/?x=1", "https://example.com/#push", "https://user:pass@example.com"] {
+            let s = Settings { bark_server: server.into(), ..Default::default() };
+            assert!(!s.bark_server_valid(), "{server}");
+        }
+    }
+
+    #[test]
+    fn existing_bark_settings_survive_roundtrip_without_exposing_key() {
+        let s: Settings = serde_json::from_str(r#"{"bark_enabled":true,"bark_server":"https://example.com/bark","bark_device_key":"private-device-key"}"#).unwrap();
+        let stored = serde_json::to_string(&s).unwrap();
+        let restored: Settings = serde_json::from_str(&stored).unwrap();
+        assert!(restored.bark_enabled);
+        assert_eq!(restored.bark_server, "https://example.com/bark");
+        assert_eq!(restored.bark_device_key, "private-device-key");
+        let view = serde_json::to_value(restored.redacted()).unwrap();
+        assert_eq!(view["bark_device_key_set"], true);
+        assert!(view.get("bark_device_key").is_none());
+        assert!(!view.to_string().contains("private-device-key"));
+    }
+
+    #[test]
     fn numbers_are_clamped_into_safe_range() {
         // 全部塞成 0 或极大值，验证每种都落在允许区间内。
         let s = Settings {
@@ -928,6 +973,9 @@ mod settings_normalize {
         assert_eq!(s.site_name, "OnlyName");
         assert_eq!(s.page_size_default, 20);
         assert_eq!(s.page_size_max, 100);
+        assert!(!s.bark_enabled);
+        assert!(s.bark_device_key.is_empty());
+        assert_eq!(s.bark_server, "https://api.day.app");
     }
 }
 
