@@ -5,15 +5,16 @@
  * 每个 render 函数都用当前 state 重建 DOM。
  */
 
-import type { AuthConfig, EmailDetail, EmailList, LoginResult, SessionResult } from "./api-types.ts";
-import { ApiError, createApi } from "./api-client.ts";
+import type { AuthConfig, EmailDetail, LoginResult, SessionResult } from "./api-types.ts";
+import { ListLoader } from "./list-loader.ts";
+import { createApi } from "./api-client.ts";
 import { renderDetail, renderDetailBody, renderDetailError, renderDetailLoading } from "./detail-view.ts";
 import { mountIcons } from "./icons.ts";
 import { el, isMobile, prefersDark } from "./dom.ts";
 import { renderList } from "./list-view.ts";
 import { createSettingsController } from "./settings-view.ts";
 import { applyLoginBackground, applySiteIdentity } from "./site-theme.ts";
-import { createState } from "./state.ts";
+import { createState, type Filter } from "./state.ts";
 import { mountTurnstile, noopWidget, type TurnstileWidget } from "./turnstile.ts";
 import { confirmDialog, renderDetailEmpty, toast } from "./ui.ts";
 
@@ -24,7 +25,15 @@ let turnstile: TurnstileWidget = noopWidget();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 let detailRequest = 0;
-let settingsReturn: { filter: "all" | "unread"; mobileShowing: boolean } = {
+let listRequest = 0;
+const listLoader = new ListLoader();
+function invalidateList(): void {
+  listRequest += 1;
+  listLoader.invalidate();
+  state.loadingList = state.loadingMore = state.switching = false;
+}
+function listTitle(): string { return state.filter === "trash" ? "回收站" : state.filter === "unread" ? "未读邮件" : "全部邮件"; }
+let settingsReturn: { filter: Filter; mobileShowing: boolean } = {
   filter: "all",
   mobileShowing: false,
 };
@@ -85,7 +94,7 @@ function setSettingsView(open: boolean): void {
     el<HTMLElement>("#open-settings").setAttribute("aria-current", "page");
   } else {
     state.filter = settingsReturn.filter;
-    el<HTMLElement>("#list-title").textContent = state.filter === "unread" ? "未读邮件" : "全部邮件";
+    el<HTMLElement>("#list-title").textContent = listTitle();
     app.classList.toggle("showing", settingsReturn.mobileShowing);
     el<HTMLElement>("#open-settings").removeAttribute("aria-current");
   }
@@ -102,6 +111,9 @@ function setLoginBusy(busy: boolean): void {
 
 function showLogin(): void {
   stopPolling();
+  if (searchTimer !== null) clearTimeout(searchTimer);
+  searchTimer = null;
+  invalidateList();
   detailRequest += 1;
   setSidebarOpen(false);
   settings.reset();
@@ -134,6 +146,7 @@ async function loadList(
   options: { reset?: boolean; cursor?: string; silent?: boolean } = {},
 ): Promise<void> {
   const { reset = false, cursor, silent = false } = options;
+  const request = ++listRequest;
 
   if (silent) {
     // 切换筛选时保留旧列表，等新数据到了再整体替换。
@@ -147,22 +160,19 @@ async function loadList(
     state.loadingMore = true;
   }
 
-  const params = new URLSearchParams();
-  if (state.filter === "unread") params.set("filter", "unread");
-  // 搜索交给后端：只过滤前端已加载的那几条会漏掉更早的邮件。
-  if (state.search) params.set("q", state.search);
-  if (cursor !== undefined) params.set("cursor", cursor);
-
   try {
-    const data = await api.request<EmailList>(`/api/emails?${params.toString()}`);
+    const data = await listLoader.load(api, state.filter, state.search, undefined, cursor);
+    if (!data || request !== listRequest) return;
     state.items = reset ? data.items : [...state.items, ...data.items];
     state.nextCursor = data.next_cursor;
     state.unread = data.unread;
   } finally {
-    state.loadingList = false;
-    state.loadingMore = false;
-    state.switching = false;
-    renderList(state, listHandlers);
+    if (request === listRequest) {
+      state.loadingList = false;
+      state.loadingMore = false;
+      state.switching = false;
+      renderList(state, listHandlers);
+    }
   }
 }
 
@@ -173,7 +183,7 @@ const listHandlers = {
   onLoadMore: (): void => {
     // 先取到局部常量：闭包里访问 `state.nextCursor` 时 TS 无法保留收窄结果。
     const cursor = state.nextCursor;
-    if (cursor !== null && !state.loadingMore && !state.loadingList) {
+    if (cursor !== null && !state.loadingMore && !state.loadingList && !state.switching) {
       void loadList({ cursor }).catch((error: unknown) => toast(errorMessage(error)));
     }
   },
@@ -200,7 +210,8 @@ async function openEmail(id: string): Promise<void> {
 
     // 后端已在 GET 详情时标为已读，这里同步本地状态，避免重拉整个列表。
     const item = state.items.find((it) => it.id === id);
-    if (item && !item.is_read) {
+    if (item && !item.is_read && detail.deleted_at === null) {
+      if (!state.loadingList && !state.switching && !state.loadingMore) invalidateList();
       item.is_read = true;
       state.unread = Math.max(0, state.unread - 1);
       renderList(state, listHandlers);
@@ -220,6 +231,7 @@ const detailHandlers = {
   onMarkUnread(id: string): void {
     void markUnread(id);
   },
+  onRestore(id: string): void { void restoreEmail(id); },
   onDelete(id: string): void {
     void deleteEmail(id);
   },
@@ -233,6 +245,7 @@ async function markUnread(id: string): Promise<void> {
     });
     const item = state.items.find((it) => it.id === id);
     if (item && item.is_read) {
+      invalidateList();
       item.is_read = false;
       state.unread += 1;
       renderList(state, listHandlers);
@@ -250,16 +263,16 @@ async function deleteEmail(id: string): Promise<void> {
   const detail = state.detail;
   if (!detail || detail.id !== id) return;
 
-  const confirmed = await confirmDialog(
-    "删除这封邮件？",
-    `「${detail.subject || "无主题"}」的正文与已保存附件将一并删除，且无法恢复。`,
-    "删除邮件",
-  );
-  if (!confirmed || state.detail?.id !== id) return;
+  const purge = detail.deleted_at !== null;
+  if (purge) {
+    const confirmed = await confirmDialog("彻底删除这封邮件？", `「${detail.subject || "无主题"}」的正文、原文与附件将永久删除，无法恢复。`, "彻底删除");
+    if (!confirmed || state.detail?.id !== id) return;
+  }
 
   const index = state.items.findIndex((item) => item.id === id);
   try {
-    await api.request(`/api/emails/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await api.request(`/api/emails/${encodeURIComponent(id)}${purge ? "/purge" : ""}`, { method: "DELETE" });
+    invalidateList();
     detailRequest += 1;
     state.items = state.items.filter((it) => it.id !== id);
     state.detail = null;
@@ -267,18 +280,33 @@ async function deleteEmail(id: string): Promise<void> {
     renderList(state, listHandlers);
     const next = state.items[Math.min(Math.max(index, 0), state.items.length - 1)];
     if (!isMobile() && next) {
-      void openEmail(next.id);
+      await openEmail(next.id);
     } else {
       closeDetail();
       renderDetailEmpty();
     }
-    toast("已删除");
+    toast(purge ? "已彻底删除" : "已移入回收站");
+    await loadList({ reset: true, silent: true });
   } catch (error) {
     toast(errorMessage(error));
   }
 }
 
+async function restoreEmail(id: string): Promise<void> {
+  try {
+    await api.request(`/api/emails/${encodeURIComponent(id)}/restore`, { method: "POST" });
+    detailRequest += 1;
+    state.detail = null;
+    state.selectedId = null;
+    renderDetailEmpty();
+    closeDetail();
+    await loadList({ reset: true, silent: true });
+    toast("已恢复到收件箱");
+  } catch (error) { toast(errorMessage(error)); }
+}
+
 async function markAllRead(): Promise<void> {
+  if (state.filter === "trash") return;
   if (settings.isOpen() && !(await settings.close())) return;
   if (state.unread === 0) {
     toast("没有未读邮件");
@@ -286,6 +314,7 @@ async function markAllRead(): Promise<void> {
   }
   try {
     await api.request("/api/emails/read-all", { method: "POST" });
+    invalidateList();
     state.items.forEach((item) => {
       item.is_read = true;
     });
@@ -330,15 +359,12 @@ async function handleLogin(event: Event): Promise<void> {
       },
     });
     api.setToken(result.token);
-    state.token = result.token;
     // 只清密码：用户名留在框里，下次登录少打一遍。
     el<HTMLInputElement>("#password").value = "";
     await enterApp();
   } catch (error) {
     errBox.textContent = errorMessage(error);
-    // token 是一次性的，失败后必须重新验证，所以把挂件放回来再重置
-    // （先显示再 reset：display:none 时挂件算不出尺寸）。
-    if (turnstile.ready) el<HTMLElement>("#turnstile-field").hidden = false;
+    // token 是一次性的，失败后重新显示挂件并验证。
     turnstile.reset();
   } finally {
     setLoginBusy(false);
@@ -366,9 +392,9 @@ async function initLoginPage(): Promise<void> {
       () => {
         toast("人机验证加载失败，请检查网络");
       },
-      // 验证通过就收起挂件：token 已经在手上，没必要继续占地方。
-      () => {
-        el<HTMLElement>("#turnstile-field").hidden = true;
+      // 验证通过后收起；过期、失败或重置后恢复显示。
+      (token) => {
+        el<HTMLElement>("#turnstile-field").hidden = Boolean(token);
       },
     );
   } catch {
@@ -412,29 +438,17 @@ function stopPolling(): void {
 }
 
 async function pollOnce(): Promise<void> {
-  if (document.hidden || !api.getToken() || state.loadingList) return;
-
-  const params = new URLSearchParams();
-  if (state.filter === "unread") params.set("filter", "unread");
-  params.set("limit", String(Math.max(state.items.length, 20)));
-
+  if (document.hidden || !api.getToken() || state.loadingList || state.loadingMore || state.switching || searchTimer !== null) return;
+  const request = ++listRequest;
   try {
-    const data = await api.request<EmailList>(`/api/emails?${params.toString()}`);
-    const previousTop = state.items[0]?.id;
-    const changed =
-      data.items.length !== state.items.length ||
-      (data.items[0] !== undefined && data.items[0].id !== previousTop) ||
-      data.unread !== state.unread;
-
-    if (changed) {
-      state.items = data.items;
-      state.nextCursor = data.next_cursor;
-      state.unread = data.unread;
-      renderList(state, listHandlers);
-    }
-  } catch {
-    // 网络抖动忽略，不打断阅读。
-  }
+    // 按服务端分页上限取回已加载数量，避免滚动多页后被轮询截断。
+    const data = await listLoader.load(api, state.filter, state.search, Math.max(state.items.length, 20));
+    if (!data || request !== listRequest) return;
+    state.items = data.items;
+    state.nextCursor = data.next_cursor;
+    state.unread = data.unread;
+    renderList(state, listHandlers);
+  } catch { /* 短暂网络错误不打断阅读。 */ }
 }
 
 // ===========================================================================
@@ -442,7 +456,7 @@ async function pollOnce(): Promise<void> {
 // ===========================================================================
 
 function errorMessage(error: unknown): string {
-  if (error instanceof ApiError || error instanceof Error) return error.message;
+  if (error instanceof Error) return error.message;
   return "未知错误";
 }
 
@@ -461,8 +475,8 @@ const settings = createSettingsController(
 async function changeFilter(button: HTMLElement): Promise<void> {
   if (settings.isOpen() && !(await settings.close())) return;
   const filter = button.dataset["filter"];
-  state.filter = filter === "unread" ? "unread" : "all";
-  el<HTMLElement>("#list-title").textContent = state.filter === "unread" ? "未读邮件" : "全部邮件";
+  state.filter = filter === "trash" ? "trash" : filter === "unread" ? "unread" : "all";
+  el<HTMLElement>("#list-title").textContent = listTitle();
   syncMailNavigation();
   setSidebarOpen(false);
   detailRequest += 1;
@@ -514,7 +528,6 @@ function bindEvents(): void {
         // 无状态 JWT，服务端无需处理，失败也继续登出。
       }
       api.setToken("");
-      state.token = "";
       showLogin();
     })();
   });
@@ -551,11 +564,13 @@ function bindEvents(): void {
   el<HTMLInputElement>("#search").addEventListener("input", (event) => {
     const value = (event.target as HTMLInputElement).value.trim();
     if (searchTimer !== null) clearTimeout(searchTimer);
+    invalidateList();
+    state.search = value;
     // 防抖：连续输入时不要每敲一个字就重排整个列表。
     searchTimer = setTimeout(() => {
-      state.search = value;
+      searchTimer = null;
       // 关键词变了就得重新取第一页，不能只在本地列表里筛。
-      void loadList({ reset: true });
+      void loadList({ reset: true }).catch((error: unknown) => toast(errorMessage(error)));
     }, 220);
   });
 
@@ -581,7 +596,7 @@ function bindEvents(): void {
   // 从后台切回来时立刻刷新，而不是等下一个 60 秒周期。
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && api.getToken()) {
-      void loadList({ reset: true }).catch((error: unknown) => toast(errorMessage(error)));
+      void pollOnce();
     }
   });
 }
@@ -598,7 +613,6 @@ async function boot(): Promise<void> {
   if (api.getToken()) {
     try {
       await api.request<SessionResult>("/api/auth/session");
-      state.token = api.getToken();
       await enterApp();
       return;
     } catch {

@@ -1,0 +1,35 @@
+import assert from "node:assert/strict";
+import { ListLoader } from "../web/src/list-loader.ts";
+import type { ApiClient } from "../web/src/api-client.ts";
+import type { EmailList } from "../web/src/api-types.ts";
+const loader = new ListLoader();
+const pending: ((value: EmailList) => void)[] = [];
+const paths: string[] = [];
+const api = { request: (path: string) => { paths.push(path); return new Promise<EmailList>((resolve) => pending.push(resolve)); } } as ApiClient;
+const first = loader.load(api, "all", "old");
+const second = loader.load(api, "trash", "invoice");
+pending[1]!({ items: [], next_cursor: null, unread: 2 });
+assert.equal((await second)?.unread, 2);
+pending[0]!({ items: [], next_cursor: null, unread: 1 });
+assert.equal(await first, null);
+assert.equal(new URL(paths[1]!, "https://test").searchParams.get("q"), "invoice");
+assert.equal(new URL(paths[1]!, "https://test").searchParams.get("filter"), "trash");
+let calls = 0;
+const capped = { request: async (path: string) => {
+  const params = new URL(path, "https://test").searchParams;
+  assert.equal(params.get("q"), "invoice");
+  const offset = Number(params.get("cursor") ?? "0");
+  const size = Math.min(30, Number(params.get("limit"))); // 服务端自定义上限小于客户端请求。
+  calls += 1;
+  return { items: Array.from({ length: size }, (_, n) => ({ id: String(offset+n) })), next_cursor: String(offset+size), unread: 0 };
+} } as ApiClient;
+const refreshed = await loader.load(capped, "all", "invoice", 135);
+assert.equal(refreshed?.items.length, 135);
+assert.equal(new Set(refreshed?.items.map((item) => item.id)).size, 135);
+assert.equal(refreshed?.next_cursor, "135");
+assert.equal(calls, 5);
+const beforeLogout = loader.load(api, "all", "");
+loader.invalidate();
+pending[2]!({ items: [], next_cursor: null, unread: 99 });
+assert.equal(await beforeLogout, null);
+console.log("通过：搜索响应乱序、筛选参数、超出服务端上限的分页刷新、退出时废弃请求");

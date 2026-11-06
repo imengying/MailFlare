@@ -5,10 +5,9 @@
 //!
 //! key 布局：`mail/{email_id}/{index}`
 
-use worker::{console_error, Fetch, Headers, Method, Request, RequestInit, Response};
+use worker::{Fetch, Headers, Method, Request, RequestInit, Response};
 
 use crate::config::Settings;
-use crate::db::AttachmentMeta;
 use crate::error::{AppError, AppResult};
 use crate::mail::RawAttachment;
 use crate::s3sign::{self, SignRequest};
@@ -59,7 +58,9 @@ pub fn parse_attachment_id(raw: &str) -> AppResult<(&str, usize)> {
         return Err(AppError::BadRequest(ERR.into()));
     }
 
-    let index: usize = index.parse().map_err(|_| AppError::BadRequest(ERR.into()))?;
+    let index: usize = index
+        .parse()
+        .map_err(|_| AppError::BadRequest(ERR.into()))?;
     Ok((email_id, index))
 }
 
@@ -67,7 +68,8 @@ pub fn parse_attachment_id(raw: &str) -> AppResult<(&str, usize)> {
 fn require_r2(settings: &Settings) -> AppResult<&Settings> {
     if !settings.r2_configured() {
         return Err(AppError::Internal(
-            "R2 未配置完整，请在「设置 → R2 存储」填写账号 ID、Access Key、Secret Key 与桶名".into(),
+            "R2 未配置完整，请在「设置 → R2 存储」填写账号 ID、Access Key、Secret Key 与桶名"
+                .into(),
         ));
     }
     Ok(settings)
@@ -219,21 +221,14 @@ pub async fn get_attachment(
     range: Option<&str>,
 ) -> AppResult<Option<Response>> {
     let settings = require_r2(settings)?;
-    let signed = sign(
-        settings,
-        "GET",
-        key,
-        s3sign::EMPTY_PAYLOAD_SHA256,
-        &[],
-    )?;
+    let signed = sign(settings, "GET", key, s3sign::EMPTY_PAYLOAD_SHA256, &[])?;
 
     if let Some(range) = range {
         signed.headers.set("range", range)?;
     }
 
     let mut init = RequestInit::new();
-    init.with_method(Method::Get)
-        .with_headers(signed.headers);
+    init.with_method(Method::Get).with_headers(signed.headers);
 
     let request = Request::new_with_init(&signed.url, &init)?;
     let resp = Fetch::Request(request).send().await?;
@@ -247,45 +242,10 @@ pub async fn get_attachment(
     }
 }
 
-/// 删除某封邮件的全部 R2 附件对象。
-///
-/// S3 的批量删除需要 XML 请求体，这里逐个 `DELETE` 更简单，而且附件数
-/// 通常只有个位数。失败只记日志，不让已经删掉的 D1 记录回滚
-/// （孤对象可由桶的生命周期规则兜底清理）。
-pub async fn delete_email_objects(settings: &Settings, attachments: &[AttachmentMeta]) {
-    // `stored = true` 的附件在入库时一定写入了 key（见 inbound 的 process），
-    // 所以这里直接用记录里的 key，不需要再按约定推导。
-    let keys: Vec<&str> = attachments
-        .iter()
-        .filter(|att| att.stored && !att.key.is_empty())
-        .map(|att| att.key.as_str())
-        .collect();
-    if keys.is_empty() {
-        return;
-    }
-
-    // 配置不全时无法删除，记一条日志就够——邮件已经不在列表里了。
-    if !settings.r2_configured() {
-        console_error!("[mailflare] R2 未配置，无法清理 {} 个附件对象", keys.len());
-        return;
-    }
-
-    for key in keys {
-        if let Err(e) = delete_object(settings, key).await {
-            console_error!("[mailflare] 删除 R2 对象失败（{key}）: {e:?}");
-        }
-    }
-}
-
 /// 删除单个对象。
-async fn delete_object(settings: &Settings, key: &str) -> AppResult<()> {
-    let signed = sign(
-        settings,
-        "DELETE",
-        key,
-        s3sign::EMPTY_PAYLOAD_SHA256,
-        &[],
-    )?;
+pub async fn delete_object(settings: &Settings, key: &str) -> AppResult<()> {
+    let settings = require_r2(settings)?;
+    let signed = sign(settings, "DELETE", key, s3sign::EMPTY_PAYLOAD_SHA256, &[])?;
 
     let mut init = RequestInit::new();
     init.with_method(Method::Delete)
@@ -359,6 +319,27 @@ pub fn effective_concurrency(settings: &Settings) -> usize {
     settings.r2_concurrency.clamp(1, 16) as usize
 }
 
+/// 保存完整 MIME 原文，供恢复附件和导出使用。
+pub async fn put_raw(settings: &Settings, id: &str, raw: Vec<u8>) -> AppResult<()> {
+    put_attachment(
+        settings,
+        &raw_key(id),
+        RawAttachment {
+            filename: format!("{id}.eml"),
+            content_type: "message/rfc822".into(),
+            bytes: raw,
+            inline: false,
+            cid: None,
+        },
+        id,
+    )
+    .await
+}
+
+pub fn raw_key(id: &str) -> String {
+    format!("mail/{id}/original.eml")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,11 +358,18 @@ mod tests {
 
     #[test]
     fn parse_rejects_malformed_ids() {
-        for bad in ["", "_", "abc", "abc_", "_0", "abc_x", "abc_-1", "abc_01", "abc_0/../x"] {
-            assert!(
-                parse_attachment_id(bad).is_err(),
-                "应该拒绝: {bad:?}"
-            );
+        for bad in [
+            "",
+            "_",
+            "abc",
+            "abc_",
+            "_0",
+            "abc_x",
+            "abc_-1",
+            "abc_01",
+            "abc_0/../x",
+        ] {
+            assert!(parse_attachment_id(bad).is_err(), "应该拒绝: {bad:?}");
         }
     }
 
@@ -389,15 +377,24 @@ mod tests {
     fn sanitize_content_type_falls_back() {
         assert_eq!(sanitize_content_type("image/png"), "image/png");
         assert_eq!(sanitize_content_type("image/png; charset=x"), "image/png");
-        assert_eq!(sanitize_content_type("图片/png"), "application/octet-stream");
+        assert_eq!(
+            sanitize_content_type("图片/png"),
+            "application/octet-stream"
+        );
         assert_eq!(sanitize_content_type(""), "application/octet-stream");
     }
 
     #[test]
     fn concurrency_is_clamped() {
-        let low = Settings { r2_concurrency: -5, ..Default::default() };
+        let low = Settings {
+            r2_concurrency: -5,
+            ..Default::default()
+        };
         assert_eq!(effective_concurrency(&low), 1);
-        let high = Settings { r2_concurrency: 999, ..Default::default() };
+        let high = Settings {
+            r2_concurrency: 999,
+            ..Default::default()
+        };
         assert_eq!(effective_concurrency(&high), 16);
     }
 }

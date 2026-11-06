@@ -6,6 +6,8 @@
       "name": "mailflare-web",
       "devDependencies": {
         "@types/bun": "1.4.4",
+        "miniflare": "5.20261103.0-beta",
+        "playwright-core": "1.64.1",
         "typescript": "7.0.2",
         "wrangler": "4.157.0",
       },
@@ -217,6 +219,8 @@
     "path-to-regexp": ["path-to-regexp@6.3.0", "https://registry.npmmirror.com/path-to-regexp/-/path-to-regexp-6.3.0.tgz", {}, "sha512-Yhpw4T9C6hPpgPeA28us07OJeqZ5EzQTkbfwuhsUg0c237RomFoETJgmp2sa3F/41gfLE6G5cqcYwznmeEeOlQ=="],
 
     "pathe": ["pathe@2.0.3", "https://registry.npmmirror.com/pathe/-/pathe-2.0.3.tgz", {}, "sha512-WUjGcAqP1gQacoQe+OBJsFA7Ld4DyXuUIjZ5cc75cLHvJ7dtNsTugphxIADwspS+AraAUePCKrSVtPLFj/F88w=="],
+
+    "playwright-core": ["playwright-core@1.64.1", "https://registry.npmmirror.com/playwright-core/-/playwright-core-1.64.1.tgz", { "bin": { "playwright-core": "cli.js" } }, "sha512-BC4s8y6SEVA6Q1rSxZTto8hI1KUI3xXlHGZgvGqP4IqPdI/a6FX9H29IDNz7vKo9l21b6LfYosScPL6M3xxyDQ=="],
 
     "semver": ["semver@7.8.6", "https://registry.npmmirror.com/semver/-/semver-7.8.6.tgz", { "bin": { "semver": "bin/semver.js" } }, "sha512-9lpSSU4Mly3mrtruwLs1eLK6+gzbzqeBFwRNjIjE+9LuDpWdYctrQlQ3ej1Ilgi7gknpsTRnPoLP8DpCHqHIJw=="],
 

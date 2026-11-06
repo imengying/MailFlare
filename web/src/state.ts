@@ -5,7 +5,7 @@
  * （用户操作 → 改 state → 调对应 render），引入状态机反而增加理解成本。
  */
 
-import type { EmailDetail, EmailSummary, SettingsView } from "./api-types.ts";
+import type { EmailDetail, EmailSummary } from "./api-types.ts";
 
 /**
  * 列表项的可变版本。
@@ -17,10 +17,9 @@ import type { EmailDetail, EmailSummary, SettingsView } from "./api-types.ts";
 export type MutableEmail = { -readonly [K in keyof EmailSummary]: EmailSummary[K] };
 
 /** 列表筛选维度。 */
-export type Filter = "all" | "unread";
+export type Filter = "all" | "unread" | "trash";
 
 export interface AppState {
-  token: string;
   filter: Filter;
   items: MutableEmail[];
   /** 下一页游标；null 表示已到末页。 */
@@ -33,16 +32,14 @@ export interface AppState {
   /** 切换筛选/搜索中：保留旧列表，只做轻微过渡，不出骨架屏。 */
   switching: boolean;
   loadingMore: boolean;
-  /** 前端本地过滤关键词（不查后端）。 */
+  /** 服务端搜索关键词。 */
   search: string;
   /** 是否允许加载远程图片（默认禁止，防追踪像素）。 */
   allowRemoteImages: boolean;
-  settings: SettingsView | null;
 }
 
 export function createState(): AppState {
   return {
-    token: "",
     filter: "all",
     items: [],
     nextCursor: null,
@@ -54,6 +51,5 @@ export function createState(): AppState {
     loadingMore: false,
     search: "",
     allowRemoteImages: false,
-    settings: null,
   };
 }

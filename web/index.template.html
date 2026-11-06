@@ -18,9 +18,6 @@
     --text-dim: #61697c;
     --text-faint: #687386;
     --accent: #5268df;
-    --accent-hover: #4357c9;
-    --accent-end: #7358d5;
-    --accent-end-hover: #6248c2;
     --accent-soft: #edf0ff;
     --accent-ring: rgba(82, 104, 223, .14);
     --accent-wash: rgba(91, 105, 218, .075);
@@ -29,8 +26,6 @@
     --on-accent: #ffffff;
     --violet: #7956bd;
     --violet-soft: #f2edfc;
-    --teal: #247c7b;
-    --teal-soft: #eaf6f4;
     --danger: #d44357;
     --danger-soft: #fff0f2;
     --danger-solid: #c9374e;
@@ -43,7 +38,6 @@
     --avatar-amber-fg: #995b2d;
     --avatar-violet-bg: #f0e8fb;
     --avatar-violet-fg: #76509f;
-    --radius: 12px;
     --shadow: 0 1px 2px rgba(24, 31, 56, .025), 0 12px 28px -22px rgba(24, 31, 56, .25);
     --shadow-lg: 0 24px 70px -24px rgba(24, 31, 56, .28);
     --sidebar-w: 196px;
@@ -61,9 +55,6 @@
       --text-dim: #a1a8b9;
       --text-faint: #8b95a9;
       --accent: #91a7ff;
-      --accent-hover: #acbcff;
-      --accent-end: #b39afb;
-      --accent-end-hover: #c2b1ff;
       --accent-soft: #252d4a;
       --accent-ring: rgba(145, 167, 255, .15);
       --accent-wash: rgba(130, 145, 238, .07);
@@ -72,8 +63,6 @@
       --on-accent: #151b34;
       --violet: #c0a5f1;
       --violet-soft: #2b243c;
-      --teal: #82cfc3;
-      --teal-soft: #1d3232;
       --danger: #ff899b;
       --danger-soft: #3b232d;
       --danger-solid: #c9455b;
@@ -288,12 +277,6 @@
   .push-badge.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
   .push-badge.failed { color: var(--danger); background: var(--danger-soft); }
   .body-wrap { width: 100%; max-width: 1040px; margin: 0 auto; padding: 24px 32px 40px; }
-  .body-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; min-height: 34px; }
-  .tabs { display: inline-flex; gap: 3px; padding: 3px; border-radius: 10px; background: var(--surface-3); }
-  .tab { display: inline-flex; align-items: center; gap: 6px; min-height: 29px; padding: 5px 10px; border: none; border-radius: 7px; background: transparent; font-size: 12px; color: var(--text-dim); }
-  .tab .icon { width: 14px; height: 14px; }
-  .tab:hover { color: var(--text); }
-  .tab.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(20, 25, 40, .08); font-weight: 550; }
   .body-scroll { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 28px; min-height: 240px; box-shadow: var(--shadow); }
   .text-body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.85; margin: 0; }
   iframe.mail-html { width: 100%; border: 0; border-radius: 5px; background: #fff; min-height: 320px; display: block; }
@@ -436,14 +419,11 @@
     .detail-subject { font-size: 18px; }
     .detail-actions { flex-wrap: wrap; }
     .detail-actions .btn { flex: 0 0 auto; }
-    .body-toolbar { flex-wrap: wrap; }
-    .body-toolbar > .btn { margin-left: auto; }
     .detail-meta { margin-top: 16px; padding: 12px; gap: 10px; }
     .detail-avatar { width: 32px; height: 32px; }
     .meta-line { grid-template-columns: 48px minmax(0, 1fr); font-size: 12px; }
     .body-wrap { padding: 14px 12px 28px; }
     .body-scroll { padding: 18px; }
-    .body-toolbar { margin-inline: 4px; }
     .attachment-list { grid-template-columns: 1fr; }
     .imgbar button { margin-left: 0; }
     .settings-head { min-height: 64px; padding: 11px 16px; }
@@ -471,7 +451,6 @@
     .btn, .btn.sm { min-height: 42px; }
     .icon-btn, .icon-btn.sm { width: 42px; }
     .nav-item { min-height: 46px; }
-    .tab { min-height: 34px; }
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
@@ -529,6 +508,7 @@
         <span data-icon="unread"></span><span>未读邮件</span>
         <span class="count" id="count-unread-nav" hidden></span>
       </button>
+      <button class="nav-item" data-filter="trash"><span data-icon="trash"></span><span>回收站</span></button>
     </nav>
     <div class="spacer"></div>
     <div class="sidebar-footer">

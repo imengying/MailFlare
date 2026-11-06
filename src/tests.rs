@@ -33,6 +33,29 @@ mod unit {
         assert_eq!(strip_html_preview("<p>&weird;</p>"), "&weird;");
     }
 
+    #[test]
+    fn html_preview_preserves_boundaries_and_unicode() {
+        assert_eq!(
+            strip_html_preview("<div>482913</div><div>10分钟</div>"),
+            "482913 10分钟"
+        );
+        assert_eq!(strip_html_preview("A&B中文测试邮件"), "A&B中文测试邮件");
+        assert_eq!(
+            strip_html_preview("A&😀中文测试邮件 &amp; &#x4e2d;"),
+            "A&😀中文测试邮件 & 中"
+        );
+        assert_eq!(
+            strip_html_preview("<STYLE>123456</STYLE><p>正文</p><SCRIPT>111222</SCRIPT>"),
+            "正文"
+        );
+        assert_eq!(strip_html_preview("<!-- >隐藏 -->正文"), "正文");
+        assert_eq!(
+            strip_html_preview("<div title='>123456'>正文</div>"),
+            "正文"
+        );
+        assert_eq!(strip_html_preview("<span>12</span><b>34</b>"), "1234");
+    }
+
     use crate::db::AttachmentMeta;
     use crate::mail;
     use crate::r2;
@@ -175,7 +198,19 @@ mod unit {
         let text = "中文abc😀emoji测试".to_string();
         let suffix_len = "\n\n…（内容过长，已截断）".len();
 
-        for budget in [0usize, 1, 2, 5, 10, 20, 30, 40, suffix_len, suffix_len + 1, 100] {
+        for budget in [
+            0usize,
+            1,
+            2,
+            5,
+            10,
+            20,
+            30,
+            40,
+            suffix_len,
+            suffix_len + 1,
+            100,
+        ] {
             let out = util::truncate_utf8(text.clone(), budget);
             if budget >= text.len() {
                 assert_eq!(out, text, "budget={budget} 不该截断");
@@ -236,14 +271,14 @@ mod unit {
     #[test]
     fn attachment_id_rejects_garbage() {
         for bad in [
-            "",           // 空
-            "abc",        // 没有分隔符
-            "abc_",       // 缺序号
-            "_3",         // 缺邮件 id
-            "abc_x",      // 序号不是数字
-            "abc_3_4",    // 多了一段
-            "abc_007",    // 前导零
-            "../etc_1",   // 非法字符
+            "",                  // 空
+            "abc",               // 没有分隔符
+            "abc_",              // 缺序号
+            "_3",                // 缺邮件 id
+            "abc_x",             // 序号不是数字
+            "abc_3_4",           // 多了一段
+            "abc_007",           // 前导零
+            "../etc_1",          // 非法字符
             "abc_9999999999999", // 序号过长
         ] {
             assert!(r2::parse_attachment_id(bad).is_err(), "`{bad}` 应被拒绝");
@@ -340,7 +375,10 @@ mod unit {
                 stored: false,
             },
         ];
-        let usable: Vec<_> = metas.iter().filter(|m| m.stored && m.cid.is_some()).collect();
+        let usable: Vec<_> = metas
+            .iter()
+            .filter(|m| m.stored && m.cid.is_some())
+            .collect();
         assert_eq!(usable.len(), 1);
         assert_eq!(usable[0].index, 0);
     }
@@ -394,7 +432,11 @@ mod cid_rewrite {
     fn rewrites_raw_and_encoded_cid() {
         let html = r#"<img src="cid:logo@example"><img src="cid:logo%40example">"#;
         let out = crate::api::rewrite_cid_for_test(html, "e1", "tok");
-        assert_eq!(out.matches("/api/attachments/e1_0?token=tok").count(), 2, "{out}");
+        assert_eq!(
+            out.matches("/api/attachments/e1_0?token=tok").count(),
+            2,
+            "{out}"
+        );
         assert!(!out.contains("cid:"), "{out}");
     }
 
@@ -449,8 +491,7 @@ mod jwt_tests {
         assert_eq!(parts.len(), 3, "必须是三段");
         // 头部的 base64url 编码是固定值（无填充）。
         assert_eq!(
-            parts[0],
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+            parts[0], "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
             "header 编码不符合 RFC 7519 预期"
         );
         // 签名长度：HMAC-SHA256 = 32 字节，base64url 无填充 = 43 字符。
@@ -507,8 +548,8 @@ mod jwt_tests {
     /// RS256→HS256 混淆攻击：把非对称算法的头部塞进来。
     #[test]
     fn rejects_other_algorithms() {
-        let header =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256","typ":"JWT"}"#);
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"alg":"RS256","typ":"JWT"}"#);
         let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(serde_json::to_vec(&claims()).unwrap());
         let token = format!("{header}.{payload}.sig");
@@ -641,8 +682,23 @@ mod markdown_escape {
         for c in input.chars() {
             if matches!(
                 c,
-                '_' | '*' | '[' | ']' | '(' | ')' | '~' | '`' | '>' | '#' | '+' | '-' | '='
-                    | '|' | '{' | '}' | '.' | '!'
+                '_' | '*'
+                    | '['
+                    | ']'
+                    | '('
+                    | ')'
+                    | '~'
+                    | '`'
+                    | '>'
+                    | '#'
+                    | '+'
+                    | '-'
+                    | '='
+                    | '|'
+                    | '{'
+                    | '}'
+                    | '.'
+                    | '!'
             ) {
                 out.push('\\');
             }
@@ -709,7 +765,10 @@ mod markdown_escape {
     fn subject_with_url_special_chars() {
         let subject = "账单 2025/10 已出?请查收#重要&urgent";
         let out = escape_body(subject);
-        assert!(out.starts_with("账单 2025/10 已出?请查收\\#重要&urgent"), "{out}");
+        assert!(
+            out.starts_with("账单 2025/10 已出?请查收\\#重要&urgent"),
+            "{out}"
+        );
     }
 
     /// 纯文本降级时要把转义反斜杠抹掉，否则用户会看到 `\*` 这种东西。
@@ -810,15 +869,23 @@ mod d1_row_budget {
         });
 
         // 未触发截断时，长度应精确等于各分量字节数之和（无提示语附加）。
-        let expected =
-            id.len() + sender.len() + recipient.len() + subject.len() + text.len() + html.len() + attachments.len();
+        let expected = id.len()
+            + sender.len()
+            + recipient.len()
+            + subject.len()
+            + text.len()
+            + html.len()
+            + attachments.len();
         assert_eq!(size, expected, "小邮件不该被截断");
     }
 
     #[test]
     fn huge_attachment_metadata_leaves_room_for_body() {
         // 极端情况：附件元数据本身就占了几百 KB（几百个附件）
-        let attachments = format!("[{}]", r#"{"index":0,"filename":"a","size":1}"#.repeat(8_000));
+        let attachments = format!(
+            "[{}]",
+            r#"{"index":0,"filename":"a","size":1}"#.repeat(8_000)
+        );
         let size = simulate_row_size(Row {
             id: "id",
             message_id: None,
@@ -831,7 +898,6 @@ mod d1_row_budget {
         });
         assert!(size <= 1_000_000, "行总长 {size} 超过上限");
     }
-
 }
 
 mod settings_normalize {
@@ -876,12 +942,29 @@ mod settings_normalize {
 
     #[test]
     fn bark_server_requires_an_http_base_url() {
-        for server in ["https://api.day.app", "http://example.com:8080", "https://example.com/bark"] {
-            let s = Settings { bark_server: server.into(), ..Default::default() };
+        for server in [
+            "https://api.day.app",
+            "http://example.com:8080",
+            "https://example.com/bark",
+        ] {
+            let s = Settings {
+                bark_server: server.into(),
+                ..Default::default()
+            };
             assert!(s.bark_server_valid(), "{server}");
         }
-        for server in ["https://", "ftp://example.com", "not-a-url", "https://example.com/?x=1", "https://example.com/#push", "https://user:pass@example.com"] {
-            let s = Settings { bark_server: server.into(), ..Default::default() };
+        for server in [
+            "https://",
+            "ftp://example.com",
+            "not-a-url",
+            "https://example.com/?x=1",
+            "https://example.com/#push",
+            "https://user:pass@example.com",
+        ] {
+            let s = Settings {
+                bark_server: server.into(),
+                ..Default::default()
+            };
             assert!(!s.bark_server_valid(), "{server}");
         }
     }

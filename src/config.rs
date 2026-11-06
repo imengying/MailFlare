@@ -12,7 +12,6 @@ use crate::util::now_secs;
 /// `configs` 表里的 key。
 pub mod keys {
     pub const SETTINGS: &str = "settings";
-    pub const LOGIN_GUARD: &str = "login_guard";
     /// 最近一次验证码推送的结果（JSON）。
     pub const LAST_PUSH: &str = "last_push";
 }
@@ -103,7 +102,6 @@ pub struct Settings {
     // ---- 列表 -----------------------------------------------------------
     pub page_size_default: i64,
     pub page_size_max: i64,
-
 }
 
 impl Default for Settings {
@@ -311,7 +309,9 @@ pub fn sender_blocked(blocked: &[String], sender: &str) -> bool {
         return false;
     }
     let domain = address.rsplit_once('@').map(|(_, d)| d).unwrap_or("");
-    blocked.iter().any(|rule| rule_matches(rule, &address, domain))
+    blocked
+        .iter()
+        .any(|rule| rule_matches(rule, &address, domain))
 }
 
 /// **白名单为空时一律放行**，这是免注册收件的前提。
@@ -324,7 +324,9 @@ pub fn recipient_allowed(allowed: &[String], recipient: &str) -> bool {
         return false;
     }
     let domain = address.rsplit_once('@').map(|(_, d)| d).unwrap_or("");
-    allowed.iter().any(|rule| rule_matches(rule, &address, domain))
+    allowed
+        .iter()
+        .any(|rule| rule_matches(rule, &address, domain))
 }
 
 /// 接受 `a@b.com` / `@b.com` / `b.com`；不允许空格与通配符。
@@ -357,7 +359,6 @@ pub fn merge_secret(slot: &mut String, patch: Option<String>) {
         *slot = v;
     }
 }
-
 
 // ===========================================================================
 // configs 表读写
@@ -402,39 +403,12 @@ pub async fn load_settings(db: &D1Database) -> AppResult<Settings> {
     let Some(raw) = get_raw(db, keys::SETTINGS).await? else {
         return Ok(Settings::default());
     };
-    Ok(serde_json::from_str::<Settings>(&raw)
+    serde_json::from_str::<Settings>(&raw)
         .map(Settings::normalized)
-        .unwrap_or_else(|e| {
-            // 配置被人工改坏时退回默认值，避免整个设置接口返回 500。
-            worker::console_error!("[mailflare] settings 解析失败，使用默认值: {e}");
-            Settings::default()
-        }))
+        .map_err(AppError::from)
 }
 
 /// 覆盖写入设置。
 pub async fn save_settings(db: &D1Database, settings: &Settings) -> AppResult<()> {
     put_raw(db, keys::SETTINGS, &serde_json::to_string(settings)?).await
-}
-
-/// 登录失败计数：`{ "fails": n, "until": unix_secs }`。
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-pub struct LoginGuard {
-    #[serde(default)]
-    pub fails: u32,
-    /// 锁定截止时间戳（秒）；0 表示未锁定。
-    #[serde(default)]
-    pub until: i64,
-}
-
-impl LoginGuard {
-    pub async fn load(db: &D1Database) -> AppResult<Self> {
-        let Some(raw) = get_raw(db, keys::LOGIN_GUARD).await? else {
-            return Ok(Self::default());
-        };
-        Ok(serde_json::from_str(&raw).unwrap_or_default())
-    }
-
-    pub async fn save(&self, db: &D1Database) -> AppResult<()> {
-        put_raw(db, keys::LOGIN_GUARD, &serde_json::to_string(self)?).await
-    }
 }

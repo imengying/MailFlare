@@ -19,19 +19,8 @@ export interface ListHandlers {
   onLoadMore(): void;
 }
 
-/** 按本地搜索关键词过滤（纯前端，不触发网络请求）。 */
-/**
- * 当前要展示的邮件。
- *
- * 搜索已改到后端（`/api/emails?q=`），所以这里直接返回列表——
- * 再从本地过滤一遍反而会漏掉正文命中但预览没命中的结果。
- */
-export function visibleItems(state: AppState): EmailSummary[] {
-  return state.items;
-}
-
-/** 更新侧边栏「未读邮件」角标。标为已读时单独调用，不必重绘整个列表。 */
-export function renderUnreadBadge(state: AppState): void {
+/** 更新侧边栏「未读邮件」角标。 */
+function renderUnreadBadge(state: AppState): void {
   const badge = el<HTMLElement>("#count-unread-nav");
   if (state.unread > 0) {
     badge.hidden = false;
@@ -48,11 +37,11 @@ export function renderList(state: AppState, handlers: ListHandlers): void {
   renderUnreadBadge(state);
   const count = el<HTMLElement>("#list-count");
   count.hidden = state.items.length === 0;
-  // 搜索已由后端过滤，返回的就是命中结果，直接报总数即可。
-  count.textContent = `${visibleItems(state).length} 封`;
+  // 搜索已由后端过滤，显示当前已加载的邮件数量。
+  count.textContent = `${state.items.length} 封`;
   const allRead = el<HTMLButtonElement>("#mark-all-read");
-  allRead.disabled = state.unread === 0;
-  allRead.title = state.unread === 0 ? "没有未读邮件" : `将 ${state.unread} 封未读邮件标为已读`;
+  allRead.disabled = state.unread === 0 || state.filter === "trash";
+  allRead.title = state.filter === "trash" ? "回收站不参与全部已读操作" : state.unread === 0 ? "没有未读邮件" : `将 ${state.unread} 封未读邮件标为已读`;
 
   if (state.loadingList) {
     pane.replaceChildren(...skeletonRows(6));
@@ -63,11 +52,12 @@ export function renderList(state: AppState, handlers: ListHandlers): void {
   // 直接清空再填会闪一下骨架屏，观感像整页刷新。
   pane.classList.toggle("is-switching", state.switching);
 
-  const items = visibleItems(state);
+  const items = state.items;
   if (items.length === 0) {
     pane.replaceChildren(
       state.search
         ? emptyState("没有匹配的邮件", "换个关键词，或清空搜索查看全部邮件", "search")
+        : state.filter === "trash" ? emptyState("回收站是空的", "删除的邮件会保留在这里，可恢复或彻底删除", "trash")
         : emptyState("收件箱是空的", state.filter === "unread" ? "所有邮件都已读完" : "新邮件到达后会显示在这里", "inbox"),
     );
     return;

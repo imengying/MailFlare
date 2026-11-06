@@ -8,14 +8,14 @@
 //! | GET    | /api/auth/session        | 校验当前 token 是否仍有效         |
 //! | GET    | /api/emails              | 分页列表（支持未读筛选/游标）     |
 //! | GET    | /api/emails/:id          | 详情（自动标记已读）              |
-//! | DELETE | /api/emails/:id          | 删除 D1 记录 + R2 附件            |
+//! | DELETE | /api/emails/:id          | 移入回收站            |
 //! | POST   | /api/emails/:id/read     | 标记已读/未读                     |
 //! | GET    | /api/attachments/:id     | 流式下载 R2 附件                  |
 //! | GET    | /api/settings            | 读取推送配置（脱敏）              |
 //! | PUT    | /api/settings            | 更新推送配置                      |
 
 use serde::{Deserialize, Serialize};
-use worker::{console_error, D1Database, Env, Request, Response};
+use worker::{D1Database, Env, Request, Response};
 
 use crate::auth::{self, SCOPE_DL};
 use crate::config::{self, Config, Settings};
@@ -46,16 +46,13 @@ pub async fn dispatch(mut req: Request, env: Env, path: &str) -> Response {
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
-    // 读不到设置时用默认值，保证「没配 D1」也能登录进来看错误。
+    // 只有从未配置时使用默认值；存储故障不能悄悄关闭 Turnstile。
     let settings = match env.d1("DB") {
-        Ok(db) => config::load_settings(&db).await.unwrap_or_else(|e| {
-            console_error!("[mailflare] 读取设置失败，使用默认值: {e:?}");
-            Settings::default()
-        }),
-        Err(e) => {
-            console_error!("[mailflare] 无法访问 D1: {e:?}");
-            Settings::default()
-        }
+        Ok(db) => match config::load_settings(&db).await {
+            Ok(settings) => settings,
+            Err(e) => return e.into_response(),
+        },
+        Err(e) => return AppError::from(e).into_response(),
     };
     let ctx = ApiCtx {
         env: &env,
@@ -124,6 +121,11 @@ async fn route(req: &mut Request, ctx: &ApiCtx<'_>, path: &str) -> AppResult<Res
         return get_attachment(req, ctx, object_id).await;
     }
 
+    if let Some(id) = path.strip_prefix("/api/originals/") {
+        require_method(&method, worker::Method::Get)?;
+        return get_original(req, ctx, id).await;
+    }
+
     // ---- 以下接口都需要登录 --------------------------------------------
     auth::require_admin(req, ctx.cfg)?;
 
@@ -166,6 +168,14 @@ async fn route(req: &mut Request, ctx: &ApiCtx<'_>, path: &str) -> AppResult<Res
                 return match (action, method) {
                     (None, worker::Method::Get) => get_email(ctx, id).await,
                     (None, worker::Method::Delete) => delete_email(ctx, id).await,
+                    (Some("restore"), worker::Method::Post) => restore_email(ctx, id).await,
+                    (Some("purge"), worker::Method::Delete) => purge_email(ctx, id).await,
+                    (Some("export"), worker::Method::Get) => {
+                        let email = db::get_email(&ctx.db()?, id)
+                            .await?
+                            .ok_or(AppError::NotFound)?;
+                        Ok(ok_json(&email))
+                    }
                     (Some("read"), worker::Method::Post) => mark_read(req, ctx, id).await,
                     (None | Some(_), _) => Err(method_not_allowed()),
                 };
@@ -230,7 +240,7 @@ struct SessionResponse {
 
 /// 登录：Turnstile -> 用户名 + 密码 -> 签发 JWT。
 ///
-/// 附带一个简单的失败限流：连续 5 次失败锁定 5 分钟，状态存在 `configs` 表里，
+/// 按 Cloudflare 注入的来源 IP 限流：5 分钟内最多 5 次尝试，原子写入 D1，
 /// 不依赖 Durable Object 也能挡住常见的密码爆破。
 async fn login(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response> {
     let body: LoginRequest = req
@@ -240,37 +250,49 @@ async fn login(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response> {
 
     let db = ctx.db()?;
 
-    // ---- 0. 先看是否处于锁定期 -----------------------------------------
-    let mut guard = config::LoginGuard::load(&db).await?;
+    // 在网络验证之前原子占用一次尝试，避免并发爆破绕过计数。
+    let client_ip = req.headers().get("cf-connecting-ip").ok().flatten();
+    let source = crate::s3sign::sha256_hex(client_ip.as_deref().unwrap_or("local").as_bytes());
     let now = crate::util::now_secs();
-    if guard.until > now {
-        let wait = guard.until - now;
-        return Err(AppError::Forbidden(format!(
-            "尝试次数过多，请在 {wait} 秒后重试"
-        )));
+    #[derive(Deserialize)]
+    struct Attempts {
+        attempts: i64,
     }
-
+    let count: Attempts = db
+        .prepare(
+            "INSERT INTO login_attempts (source, attempts, reset_at) VALUES (?1, 1, ?2 + 300) \
+         ON CONFLICT(source) DO UPDATE SET \
+         attempts = CASE WHEN reset_at <= ?2 THEN 1 ELSE attempts + 1 END, \
+         reset_at = CASE WHEN reset_at <= ?2 THEN ?2 + 300 ELSE reset_at END RETURNING attempts",
+        )
+        .bind_refs(&[
+            worker::D1Type::Text(&source),
+            worker::D1Type::Real(now as f64),
+        ])?
+        .first(None)
+        .await?
+        .ok_or_else(|| AppError::Internal("限流计数失败".into()))?;
+    if count.attempts > 5 {
+        return Err(AppError::TooManyRequests(
+            "尝试次数过多，请在 5 分钟后重试".into(),
+        ));
+    }
     // ---- 1. Turnstile --------------------------------------------------
     // client IP 由 Cloudflare 注入；本地 dev 时可能是 None。
-    let client_ip = req.headers().get("cf-connecting-ip").ok().flatten();
-    if let Err(e) =
-        auth::verify_turnstile(ctx.settings, &body.turnstile_token, client_ip.as_deref()).await
-    {
-        // Turnstile 失败也计入失败次数，防止刷接口。
-        record_failure(&db, &mut guard, now).await?;
-        return Err(e);
-    }
+    auth::verify_turnstile(ctx.settings, &body.turnstile_token, client_ip.as_deref()).await?;
 
     // ---- 2. 用户名 + 密码 ----------------------------------------------
     if !auth::verify_credentials(ctx.cfg, &body.username, &body.password) {
         // 不区分「用户名不存在」与「密码错误」：避免泄露用户名是否正确。
-        record_failure(&db, &mut guard, now).await?;
+
         return Err(AppError::Forbidden("用户名或密码错误".into()));
     }
 
     // ---- 3. 成功：清空计数并签发 token ---------------------------------
-    guard = config::LoginGuard::default();
-    guard.save(&db).await?;
+    db.prepare("DELETE FROM login_attempts WHERE source = ?1")
+        .bind_refs(&[worker::D1Type::Text(&source)])?
+        .run()
+        .await?;
 
     let token = auth::issue_token(
         ctx.cfg,
@@ -282,20 +304,6 @@ async fn login(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response> {
         token,
         expires_in: auth::TOKEN_TTL_SECS,
     }))
-}
-
-/// 累加失败次数，达到阈值就锁定 5 分钟。
-async fn record_failure(
-    db: &D1Database,
-    guard: &mut config::LoginGuard,
-    now: i64,
-) -> AppResult<()> {
-    guard.fails = guard.fails.saturating_add(1);
-    if guard.fails >= 5 {
-        guard.until = now + 300;
-        guard.fails = 0;
-    }
-    guard.save(db).await
 }
 
 // ===========================================================================
@@ -321,7 +329,10 @@ async fn list_emails(req: &Request, ctx: &ApiCtx<'_>) -> AppResult<Response> {
     let unread_only = matches!(
         query_param(&url, "filter").as_deref(),
         Some("unread") | Some("unseen")
-    ) || matches!(query_param(&url, "unread").as_deref(), Some("1") | Some("true"));
+    ) || matches!(
+        query_param(&url, "unread").as_deref(),
+        Some("1") | Some("true")
+    );
 
     let limit = query_i64(
         &url,
@@ -343,6 +354,7 @@ async fn list_emails(req: &Request, ctx: &ApiCtx<'_>) -> AppResult<Response> {
         &db,
         &ListQuery {
             unread_only,
+            trash: query_param(&url, "filter").as_deref() == Some("trash"),
             cursor,
             limit,
             search,
@@ -366,6 +378,7 @@ struct EmailDetailResponse {
     attachment_urls: Vec<AttachmentUrl>,
     /// 从这封邮件里提取到的验证码；没有则为空。
     otp_code: Option<String>,
+    original_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -382,7 +395,7 @@ async fn get_email(ctx: &ApiCtx<'_>, id: &str) -> AppResult<Response> {
     };
 
     // 打开详情即标记已读（只写一次，避免每次 GET 都产生写放大）。
-    if !email.is_read {
+    if !email.is_read && email.deleted_at.is_none() {
         db::set_read(&db, id, true).await?;
         email.is_read = true;
     }
@@ -393,14 +406,8 @@ async fn get_email(ctx: &ApiCtx<'_>, id: &str) -> AppResult<Response> {
 
     // 验证码在收信推送时已提取过一次，这里对详情实时再提取一次透出给前端，
     // 用户不用进正文里手动找码。
-    let otp_code = {
-        let source = if email.text_body.is_empty() {
-            &email.html_body
-        } else {
-            &email.text_body
-        };
-        crate::otp::extract(&email.subject, source).map(|c| c.value)
-    };
+    let otp_code =
+        crate::otp::extract(&email.subject, &email.text_body, &email.html_body).map(|c| c.value);
 
     let attachment_urls = email
         .attachments
@@ -421,7 +428,12 @@ async fn get_email(ctx: &ApiCtx<'_>, id: &str) -> AppResult<Response> {
         email.html_body = rewrite_cid(&email.html_body, id, &email.attachments, &dl_token);
     }
 
+    let original_url = email
+        .raw_key
+        .as_ref()
+        .map(|_| format!("/api/originals/{id}?token={dl_token}"));
     Ok(ok_json(&EmailDetailResponse {
+        original_url,
         email,
         attachment_urls,
         otp_code,
@@ -525,17 +537,71 @@ async fn mark_read(req: &mut Request, ctx: &ApiCtx<'_>, id: &str) -> AppResult<R
 }
 
 async fn delete_email(ctx: &ApiCtx<'_>, id: &str) -> AppResult<Response> {
-    let db = ctx.db()?;
-
-    // 先删 D1：即使后续 R2 清理失败，也不会出现“列表里还有、点开 404”的鬼数据。
-    let Some(attachments) = db::delete_email(&db, id).await? else {
+    if !db::set_deleted(&ctx.db()?, id, true).await? {
         return Err(AppError::NotFound);
-    };
-
-    // R2 删除失败不阻塞响应，孤对象可由 bucket 生命周期规则兜底清理。
-    r2::delete_email_objects(ctx.settings, &attachments).await;
-
+    }
     Ok(ok_json(&serde_json::json!({ "id": id, "deleted": true })))
+}
+
+async fn restore_email(ctx: &ApiCtx<'_>, id: &str) -> AppResult<Response> {
+    if !db::set_deleted(&ctx.db()?, id, false).await? {
+        return Err(AppError::BadRequest("邮件不存在或正在彻底删除".into()));
+    }
+    Ok(ok_json(&serde_json::json!({ "id": id, "restored": true })))
+}
+
+async fn purge_email(ctx: &ApiCtx<'_>, id: &str) -> AppResult<Response> {
+    let db = ctx.db()?;
+    // 锁住回收站记录，阻止恢复与删除竞态；尚有恢复任务时不清理对象。
+    let claim = db.prepare("UPDATE emails SET storage_status = 'purging' WHERE id = ?1 AND deleted_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM inbound_jobs WHERE id = ?1)")
+        .bind_refs(&[worker::D1Type::Text(id)])?.run().await?;
+    if claim.meta()?.and_then(|m| m.changes) == Some(0) {
+        return Err(AppError::BadRequest(
+            "请先移入回收站，并等待附件恢复完成后再彻底删除".into(),
+        ));
+    }
+    let email = db::get_email(&db, id).await?.ok_or(AppError::NotFound)?;
+    for att in &email.attachments {
+        if att.stored {
+            let key = if att.key.is_empty() {
+                r2::attachment_key(id, att.index)
+            } else {
+                att.key.clone()
+            };
+            r2::delete_object(ctx.settings, &key).await?;
+        }
+    }
+    if let Some(key) = &email.raw_key {
+        r2::delete_object(ctx.settings, key).await?;
+    }
+    // 部分删除失败时保留 purging 记录，用户可再次点击彻底删除来完成清理。
+    db.prepare("DELETE FROM emails WHERE id = ?1 AND storage_status = 'purging'")
+        .bind_refs(&[worker::D1Type::Text(id)])?
+        .run()
+        .await?;
+    Ok(ok_json(&serde_json::json!({ "id": id, "purged": true })))
+}
+
+async fn get_original(req: &Request, ctx: &ApiCtx<'_>, id: &str) -> AppResult<Response> {
+    auth::require_attachment_access(req, &req.url()?, ctx.cfg, id)?;
+    let email = db::get_email(&ctx.db()?, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let key = email.raw_key.ok_or(AppError::NotFound)?;
+    let upstream = r2::get_attachment(ctx.settings, &key, None)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let (_, body) = upstream.into_parts();
+    let headers = worker::Headers::new();
+    headers.set("content-type", "application/octet-stream")?;
+    headers.set(
+        "content-disposition",
+        &r2::content_disposition(&format!("{id}.eml"), false),
+    )?;
+    headers.set("cache-control", "private, no-store")?;
+    headers.set("x-content-type-options", "nosniff")?;
+    headers.set("content-security-policy", "default-src 'none'; sandbox")?;
+    Ok(Response::from_body(body)?.with_headers(headers))
 }
 
 // ===========================================================================
@@ -576,9 +642,7 @@ async fn get_attachment(req: &Request, ctx: &ApiCtx<'_>, object_id: &str) -> App
 
     // 3. 把客户端的 Range 头透传给 S3（不参与签名）。
     let range = req.headers().get("range").ok().flatten();
-    let Some(upstream) =
-        r2::get_attachment(ctx.settings, &key, range.as_deref()).await?
-    else {
+    let Some(upstream) = r2::get_attachment(ctx.settings, &key, range.as_deref()).await? else {
         return Err(AppError::NotFound);
     };
     let status = upstream.status_code();
@@ -633,10 +697,7 @@ async fn get_attachment(req: &Request, ctx: &ApiCtx<'_>, object_id: &str) -> App
 
     // Range 续传相关头部：206 时把 Content-Range 透传回去，
     // 否则浏览器无法知道拿到的是哪一段，断点续传会坏。
-    headers.set(
-        "accept-ranges",
-        accept_ranges.as_deref().unwrap_or("bytes"),
-    )?;
+    headers.set("accept-ranges", accept_ranges.as_deref().unwrap_or("bytes"))?;
     if let Some(value) = content_range {
         headers.set("content-range", &value)?;
     }
@@ -766,7 +827,10 @@ pub(crate) fn public_background(raw: &str) -> String {
         return String::new();
     }
     // 地址里可能有引号，转义后再包，避免提前闭合 url()。
-    format!("url(\"{}\")", value.replace('\\', "\\\\").replace('"', "\\\""))
+    format!(
+        "url(\"{}\")",
+        value.replace('\\', "\\\\").replace('"', "\\\"")
+    )
 }
 
 /// 设置的可写字段。
@@ -851,7 +915,10 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
     config::merge_secret(&mut settings.telegram_bot_token, patch.telegram_bot_token);
     config::merge_secret(&mut settings.bark_device_key, patch.bark_device_key);
     config::merge_secret(&mut settings.r2_access_key_id, patch.r2_access_key_id);
-    config::merge_secret(&mut settings.r2_secret_access_key, patch.r2_secret_access_key);
+    config::merge_secret(
+        &mut settings.r2_secret_access_key,
+        patch.r2_secret_access_key,
+    );
 
     // 地址列表：整表替换（前端提交完整数组，不支持逐项增删——
     // 列表项之间没有稳定标识，做增量合并反而容易错）。
@@ -869,7 +936,10 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
         return Err(AppError::BadRequest("站点名不能超过 40 个字符".into()));
     }
     // Logo 与背景现在都只接受 https 图片地址。
-    for (label, value) in [("Logo", &settings.site_logo), ("背景", &settings.site_background)] {
+    for (label, value) in [
+        ("Logo", &settings.site_logo),
+        ("背景", &settings.site_background),
+    ] {
         if !value.is_empty() && !value.to_ascii_lowercase().starts_with("https://") {
             return Err(AppError::BadRequest(format!(
                 "{label}地址必须以 https:// 开头"
@@ -922,7 +992,10 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
     // 账号 ID 是 32 位十六进制；填成邮箱或 URL 会导致请求 404 且难排查。
     if !settings.r2_account_id.is_empty()
         && !(settings.r2_account_id.len() == 32
-            && settings.r2_account_id.bytes().all(|b| b.is_ascii_hexdigit()))
+            && settings
+                .r2_account_id
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit()))
     {
         return Err(AppError::BadRequest(
             "R2 账号 ID 应是 32 位十六进制字符串（可在控制台右侧栏或 R2 页面找到）".into(),
@@ -937,4 +1010,3 @@ async fn put_settings(req: &mut Request, ctx: &ApiCtx<'_>) -> AppResult<Response
     config::save_settings(&db, &settings).await?;
     Ok(ok_json(&settings.redacted()))
 }
-

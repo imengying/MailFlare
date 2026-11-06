@@ -41,3 +41,6 @@ not_found_handling = "single-page-application"
 # 环境变量只有三个登录凭证，其余配置都在 D1：
 #   ADMIN_USERNAME / ADMIN_PASSWORD / JWT_SECRET
 # Email Routing -> Send to Worker 触发 email 事件。
+
+[triggers]
+crons = ["* * * * *"]

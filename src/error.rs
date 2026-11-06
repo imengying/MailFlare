@@ -11,6 +11,7 @@ use worker::Response;
 pub enum AppError {
     /// 400：请求参数/请求体不合法
     BadRequest(String),
+    TooManyRequests(String),
     /// 401：未登录或 token 失效
     Unauthorized(String),
     /// 403：Turnstile 校验失败、密码错误、登录被限流等
@@ -30,6 +31,7 @@ impl AppError {
             Self::BadRequest(m)
             | Self::Unauthorized(m)
             | Self::Forbidden(m)
+            | Self::TooManyRequests(m)
             | Self::MethodNotAllowed(m) => m.clone(),
             Self::NotFound => "资源不存在".to_string(),
             Self::Internal(_) => "服务器内部错误".to_string(),
@@ -39,6 +41,7 @@ impl AppError {
     fn status(&self) -> u16 {
         match self {
             Self::BadRequest(_) => 400,
+            Self::TooManyRequests(_) => 429,
             Self::Unauthorized(_) => 401,
             Self::Forbidden(_) => 403,
             Self::NotFound => 404,

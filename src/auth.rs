@@ -42,13 +42,8 @@ pub fn issue_token(cfg: &Config, scope: &str, subject: &str, ttl_secs: i64) -> A
 
 /// 校验 token 并检查用途是否匹配。
 pub fn verify_token(cfg: &Config, token: &str, expected_scope: &str) -> AppResult<Claims> {
-    let claims = jwt::decode(
-        cfg.jwt_secret.as_bytes(),
-        token,
-        now_secs(),
-        CLOCK_LEEWAY,
-    )
-    .map_err(|_| AppError::Unauthorized("登录已过期，请重新登录".into()))?;
+    let claims = jwt::decode(cfg.jwt_secret.as_bytes(), token, now_secs(), CLOCK_LEEWAY)
+        .map_err(|_| AppError::Unauthorized("登录已过期，请重新登录".into()))?;
 
     if claims.scp != expected_scope {
         return Err(AppError::Unauthorized("凭证用途不匹配".into()));
@@ -61,7 +56,10 @@ fn bearer(req: &Request) -> Option<String> {
     let raw = req.headers().get("authorization").ok().flatten()?;
     let raw = raw.trim();
     // 大小写不敏感地剥离 "bearer " 前缀。
-    let token = if raw.len() > 7 && raw[..7].eq_ignore_ascii_case("bearer ") {
+    let token = if raw
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("bearer "))
+    {
         &raw[7..]
     } else {
         raw

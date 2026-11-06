@@ -1,7 +1,6 @@
 //! MailFlare —— 单用户邮件管理系统。
 //!
-//! 一个 Worker 两个事件：`fetch` 处理 `/api/*` 并回落到静态资源，
-//! `email` 接收 Email Routing 投递的邮件。
+//! `fetch` 提供 API 与静态资源，`email` 收信，`scheduled` 恢复存储和通知任务。
 
 mod api;
 mod auth;
@@ -9,6 +8,7 @@ mod config;
 mod db;
 mod error;
 mod inbound;
+mod jobs;
 mod jwt;
 mod mail;
 mod notify;
@@ -82,4 +82,11 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 #[event(email)]
 async fn email_handler(message: ForwardableEmailMessage, env: Env, ctx: Context) -> Result<()> {
     inbound::handle(message, env, ctx).await
+}
+
+#[event(scheduled)]
+async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
+    if let Err(e) = jobs::run(&env).await {
+        console_error!("[mailflare] 定时任务失败: {e:?}");
+    }
 }

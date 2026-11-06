@@ -15,6 +15,7 @@ interface TurnstileApi {
       callback?: (token: string) => void;
       "expired-callback"?: () => void;
       "error-callback"?: () => void;
+      "timeout-callback"?: () => void;
     },
   ): string;
   reset(widgetId?: string): void;
@@ -34,13 +35,11 @@ export interface TurnstileWidget {
   getToken(): string;
   /** 验证过期/失败/换人后重置，让用户重新点一次。 */
   reset(): void;
-  /** 挂件是否已成功初始化。 */
-  readonly ready: boolean;
 }
 
 /** 创建一个「永不完成」的空挂件，用于 `turnstile_required: false` 的情况。 */
 export function noopWidget(): TurnstileWidget {
-  return { getToken: () => "", reset: () => {}, ready: false };
+  return { getToken: () => "", reset: () => {} };
 }
 
 /**
@@ -56,10 +55,15 @@ export async function mountTurnstile(
   container: string | HTMLElement,
   theme: "light" | "dark",
   onLoadError: () => void,
-  /** 验证通过回调：{@link onToken} 拿到 token 后可以收起挂件。 */
-  onVerified?: (token: string) => void,
+  /** token 变化时同步界面：有值则隐藏挂件，失效或重置则重新显示。 */
+  onTokenChange?: (token: string) => void,
 ): Promise<TurnstileWidget> {
-  await loadScript();
+  try {
+    await loadScript();
+  } catch {
+    onLoadError();
+    return noopWidget();
+  }
   const api = window.turnstile;
   if (!api) {
     onLoadError();
@@ -67,32 +71,31 @@ export async function mountTurnstile(
   }
 
   let token = "";
+  const setToken = (value: string): void => {
+    token = value;
+    onTokenChange?.(value);
+  };
+  const invalidate = (): void => setToken("");
   const widgetId = api.render(container, {
     sitekey: siteKey,
     theme,
-    callback: (value: string) => {
-      token = value;
-      onVerified?.(value);
-    },
-    "expired-callback": () => {
-      token = "";
-    },
-    "error-callback": () => {
-      token = "";
-    },
+    callback: setToken,
+    "expired-callback": invalidate,
+    "error-callback": invalidate,
+    "timeout-callback": invalidate,
   });
 
   return {
     getToken: () => token,
     reset(): void {
-      token = "";
+      // 先通知界面显示挂件，再 reset，确保挂件可以计算布局尺寸。
+      invalidate();
       try {
         api.reset(widgetId);
       } catch {
         // 挂件已被移除时 reset 会抛，忽略即可。
       }
     },
-    ready: true,
   };
 }
 

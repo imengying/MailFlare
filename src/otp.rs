@@ -1,44 +1,32 @@
-//! 验证码提取。
+//! 验证码提取，供邮件详情和通知共用。
 //!
-//! 只在推送阶段使用：从主题和正文里找一次性的数字/字母码，
-//! 命中后由 `notify` 把它单独置顶显示，省得再去翻邮件。
-//!
-//! 设计约束：
-//! - **宁缺毋滥**。漏掉一个验证码只是少了个便利，误报却会把普通数字
-//!   （订单号、金额、日期）当成验证码推给用户，反而干扰判断。
-//! - 不依赖具体站点，靠「验证码/验证码是/verification code」这类
-//!   上下文关键词定位，而不是纯正则扫全局数字。
+//! 候选必须有验证语境；强关键词优先，距离统一按字符计算。
+//! 订单号等负面语境优先排除，同等可信但不同的候选不自动选择。
 
-/// 提取出的验证码。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Code {
     pub value: String,
-    /// 该码所属的场景，用于通知里做小标题（如「验证码」「登录码」）。
     pub label: &'static str,
 }
 
-/// 上下文关键词：`(关键词, 展示标签)`。
-///
-/// 顺序有意义：越具体的越靠前，命中即返回。
+// 具体关键词放在前面，包含关系只保留更具体的那一个。
 const KEYWORDS: &[(&str, &str)] = &[
-    // 顺序有意义：`extract` 按这个表依次尝试，**更具体的必须排在泛用的前面**，
-    // 否则「login code: 123456」会先被 `code` 命中，标签也跟着变成通用文案。
     ("verification code", "验证码"),
     ("confirmation code", "验证码"),
-    ("confirmation number", "确认码"),
     ("security code", "安全码"),
     ("login code", "登录码"),
     ("one-time code", "验证码"),
     ("one-time password", "验证码"),
     ("one-time passcode", "验证码"),
     ("one time password", "验证码"),
+    ("one time code", "验证码"),
+    ("one time passcode", "验证码"),
     ("temporary password", "临时密码"),
     ("passcode", "验证码"),
     ("access code", "验证码"),
     ("authentication code", "验证码"),
     ("sign-in code", "登录码"),
-    // 泛用词放最后：Apple ID Code、login code 这类都靠它兜底。
-    ("code", "验证码"),
+    ("sign in code", "登录码"),
     ("otp", "验证码"),
     ("2fa", "验证码"),
     // 中文：各家的叫法差一个字就漏，「安全代码」与「安全码」是两个不同的串，
@@ -58,155 +46,343 @@ const KEYWORDS: &[(&str, &str)] = &[
     ("激活码", "激活码"),
 ];
 
-/// 从邮件里提取验证码；没有可信结果时返回 `None`。
-///
-/// 优先看主题（邮件客户端通常把验证码放在主题里），再看正文前若干字符。
-///
-/// 正文可能是 HTML：调用方无法可靠区分，所以这里统一做一次「去标签」。
-/// 验证码常被 `<div>` 之类的标签包着，不去标签会让关键词和数字被标签隔开。
-pub fn extract(subject: &str, body: &str) -> Option<Code> {
-    // 去标签后再截断：先截断可能把标签截成半截，反而更难处理。
-    let plain = crate::db::strip_html_preview(body);
-    // 正文只看前 2000 字符：验证码总在开头，没必要扫完整封长邮件。
-    let head: String = plain.chars().take(2000).collect();
+const WEAK_KEYWORDS: &[(&str, &str)] = &[("confirmation number", "确认码"), ("code", "验证码")];
+const NON_OTP: &[&str] = &[
+    "postal code",
+    "postcode",
+    "zip code",
+    "barcode",
+    "order",
+    "invoice",
+    "tracking",
+    "booking",
+    "reservation",
+    "coupon",
+    "discount",
+    "promo",
+    "product code",
+    "order number",
+    "order confirmation number",
+    "order confirmation code",
+    "booking confirmation code",
+    "booking confirmation number",
+    "reservation number",
+    "invoice number",
+    "tracking number",
+    "coupon code",
+    "discount code",
+    "promo code",
+    "error code",
+    "status code",
+    "reference number",
+    "copyright",
+    "订单号",
+    "订单",
+    "运单号",
+    "运单",
+    "物流单号",
+    "物流单",
+    "邮编",
+    "邮政编码",
+    "优惠码",
+    "折扣码",
+    "错误码",
+    "产品编号",
+    "金额",
+    "版权",
+];
 
-    for text in [subject, head.as_str()] {
-        for (keyword, label) in KEYWORDS {
-            if let Some(code) = find_near(text, keyword) {
-                return Some(Code { value: code, label });
+/// 优先主题，其次纯文本；没有可信结果时才尝试 HTML。
+/// 限制分析长度，避免长邮件占用过多 Worker CPU。
+pub fn extract(subject: &str, text_body: &str, html_body: &str) -> Option<Code> {
+    extract_text(subject)
+        .or_else(|| extract_text(text_body))
+        .or_else(|| extract_text(&crate::db::html_to_text(html_body)))
+}
+
+#[derive(Clone, Copy)]
+struct Span {
+    start: usize,
+    end: usize,
+}
+impl Span {
+    fn distance(self, other: Self) -> usize {
+        other
+            .start
+            .saturating_sub(self.end)
+            .max(self.start.saturating_sub(other.end))
+    }
+    fn contains(self, other: Self) -> bool {
+        self.start <= other.start && self.end >= other.end
+    }
+}
+
+struct Anchor {
+    span: Span,
+    label: &'static str,
+    strong: bool,
+}
+struct Candidate {
+    span: Span,
+    value: String,
+    strong_only: bool,
+}
+
+fn identifier(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+fn occurrences(chars: &[char], keyword: &str) -> Vec<Span> {
+    let needle: Vec<char> = keyword.chars().collect();
+    chars
+        .windows(needle.len())
+        .enumerate()
+        .filter_map(|(start, window)| {
+            let end = start + needle.len();
+            if window != needle
+                || (needle[0].is_ascii()
+                    && (start > 0 && identifier(chars[start - 1])
+                        || end < chars.len() && identifier(chars[end])))
+            {
+                return None;
+            }
+            Some(Span { start, end })
+        })
+        .collect()
+}
+
+/// 逗号、句号等通常分隔不同字段；同一句内的直接关联优先。
+fn context_distance(chars: &[char], left: Span, right: Span) -> usize {
+    let gap = if left.end <= right.start {
+        &chars[left.end..right.start]
+    } else if right.end <= left.start {
+        &chars[right.end..left.start]
+    } else {
+        &[]
+    };
+    gap.len()
+        + 12 * gap
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c,
+                    ',' | '，' | ';' | '；' | '.' | '。' | '!' | '！' | '?' | '？'
+                )
+            })
+            .count()
+}
+
+fn extract_text(text: &str) -> Option<Code> {
+    const MAX_CHARS: usize = 4000;
+    // 多读一个字符，以识别被长度上限截断的 token。
+    let mut chars: Vec<char> = text.chars().take(MAX_CHARS + 1).collect();
+    let truncated = chars.len() > MAX_CHARS;
+    chars.truncate(MAX_CHARS);
+    let lower: Vec<char> = chars.iter().map(char::to_ascii_lowercase).collect();
+    let mut anchors: Vec<Anchor> = Vec::new();
+    for (keywords, strong) in [(KEYWORDS, true), (WEAK_KEYWORDS, false)] {
+        for &(keyword, label) in keywords {
+            for span in occurrences(&lower, keyword) {
+                if !anchors.iter().any(|a| a.span.contains(span)) {
+                    anchors.push(Anchor {
+                        span,
+                        label,
+                        strong,
+                    });
+                }
             }
         }
     }
-    None
-}
-
-/// 在关键词附近找一个像验证码的串。
-///
-/// 取窗口内**距离关键词最近**的候选，而不是固定「先看后面再看前面」：
-/// `BFM-GXB xAI confirmation code` 这种验证码在前、关键词在后的写法很常见，
-/// 固定顺序会先撞上后面的无关数字。
-fn find_near(text: &str, keyword: &str) -> Option<String> {
-    let lower = text.to_ascii_lowercase();
-    // 关键词前后的搜索窗口。真实邮件常写成
-    // 「Please use the code below to validate your email address. BFM-GXB」，
-    // 关键词与验证码之间隔着半句话，窗口太窄会漏；命中时按距离取最近的一个，
-    // 所以放宽窗口不会明显增加误报。
-    const WINDOW_BEFORE: usize = 80;
-    const WINDOW_AFTER: usize = 120;
-
-    let mut best: Option<(usize, String)> = None;
-    let mut from = 0;
-    while let Some(pos) = lower[from..].find(keyword) {
-        let at = from + pos;
-        let after = at + keyword.len();
-
-        // 关键词之前：越靠近关键词的候选越优先。
-        let start = text[..at]
-            .char_indices()
-            .rev()
-            .nth(WINDOW_BEFORE)
-            .map_or(0, |(i, _)| i);
-        let head = &text[start..at];
-        for (offset, code) in candidates(head) {
-            // 距离 = 候选结束位置到关键词的距离（head 内越靠后越近）。
-            let distance = head.len() - offset;
-            if best.as_ref().is_none_or(|(d, _)| distance < *d) {
-                best = Some((distance, code));
+    if anchors.is_empty() {
+        return None;
+    }
+    let negative: Vec<Span> = NON_OTP
+        .iter()
+        .flat_map(|word| occurrences(&lower, word))
+        .collect();
+    anchors.retain(|anchor| !negative.iter().any(|span| span.contains(anchor.span)));
+    let candidates: Vec<_> = candidates(&chars)
+        .into_iter()
+        .filter(|candidate| {
+            !anchors
+                .iter()
+                .any(|a| candidate.span.start < a.span.end && candidate.span.end > a.span.start)
+        })
+        .map(|candidate| {
+            let negative_distance = negative
+                .iter()
+                .map(|span| context_distance(&chars, *span, candidate.span))
+                .min();
+            (candidate, negative_distance)
+        })
+        .collect();
+    let mut best: Option<((bool, usize), Code)> = None;
+    let mut ambiguous = false;
+    for anchor in &anchors {
+        for (candidate, negative_distance) in &candidates {
+            if candidate.strong_only && !anchor.strong
+                || truncated && candidate.span.end == chars.len()
+            {
+                continue;
             }
-        }
-
-        // 关键词之后。
-        let tail: String = text[after..].chars().take(WINDOW_AFTER).collect();
-        for (offset, code) in candidates(&tail) {
-            let distance = offset;
-            if best.as_ref().is_none_or(|(d, _)| distance < *d) {
-                best = Some((distance, code));
+            let distance = anchor.span.distance(candidate.span);
+            let limit = if candidate.strong_only {
+                48
+            } else if candidate.span.end <= anchor.span.start {
+                80
+            } else {
+                120
+            };
+            if distance > limit
+                || (candidate.span.start < anchor.span.end
+                    && candidate.span.end > anchor.span.start)
+            {
+                continue;
             }
-        }
-
-        from = after;
-        if from >= lower.len() {
-            break;
+            // 数字更靠近订单号、邮编等标签时，不借附近的验证码关键词误报。
+            let proximity = context_distance(&chars, anchor.span, candidate.span);
+            if negative_distance.is_some_and(|distance| distance <= proximity) {
+                continue;
+            }
+            let score = (!anchor.strong, proximity);
+            match &best {
+                Some((rank, code)) if *rank == score => {
+                    if code.value != candidate.value {
+                        ambiguous = true;
+                    }
+                }
+                Some((rank, _)) if *rank < score => {}
+                _ => {
+                    best = Some((
+                        score,
+                        Code {
+                            value: candidate.value.clone(),
+                            label: anchor.label,
+                        },
+                    ));
+                    ambiguous = false;
+                }
+            }
         }
     }
-    best.map(|(_, code)| code)
+    if ambiguous {
+        None
+    } else {
+        best.map(|(_, code)| code)
+    }
 }
 
-/// 列出文本中所有形似验证码的候选，附带其在文本中的起始偏移。
-fn candidates(text: &str) -> Vec<(usize, String)> {
-    let chars: Vec<char> = text.chars().collect();
+fn horizontal_space(c: char) -> bool {
+    c.is_whitespace() && !matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')
+}
+
+/// 从完整文本切 token，再计算窗口距离；不把窗口边缘的长订单号截成短码。
+fn candidates(chars: &[char]) -> Vec<Candidate> {
     let mut out = Vec::new();
     let mut i = 0;
-
     while i < chars.len() {
         if !chars[i].is_ascii_alphanumeric() {
             i += 1;
             continue;
         }
         let start = i;
-        // 允许内部的连字符：`BFM-GXB`、`123-456` 这类分组码很常见。
-        // 连字符必须夹在两个字母数字之间，不能收尾。
-        while i < chars.len() {
-            let boundary_dash = chars[i] == '-'
-                && i > start
-                && i + 1 < chars.len()
-                && chars[i + 1].is_ascii_alphanumeric();
-            if !chars[i].is_ascii_alphanumeric() && !boundary_dash {
-                break;
-            }
+        while i < chars.len() && (identifier(chars[i]) || chars[i] == '-') {
             i += 1;
         }
-
-        let token: String = chars[start..i].iter().collect();
-        // 紧贴字母数字的 token 会被切分，这里再挡一次下划线衔接。
-        if start > 0 && chars[start - 1] == '_' {
+        let mut end = i;
+        let mut value: String = chars[start..end].iter().collect();
+        let mut grouped = false;
+        if chars[start..end].iter().all(char::is_ascii_digit) && end - start <= 4 {
+            let mut groups = vec![end - start];
+            let mut cursor = end;
+            loop {
+                let separator = cursor;
+                while cursor < chars.len() && horizontal_space(chars[cursor]) {
+                    cursor += 1;
+                }
+                if cursor == separator {
+                    break;
+                }
+                let next = cursor;
+                while cursor < chars.len() && chars[cursor].is_ascii_digit() {
+                    cursor += 1;
+                }
+                if cursor == next || cursor < chars.len() && identifier(chars[cursor]) {
+                    break;
+                }
+                groups.push(cursor - next);
+                end = cursor;
+            }
+            let digits: usize = groups.iter().sum();
+            // 123 456、1234 5678、12 34 56、逐位空格；不合并 123456 + 10分钟。
+            grouped = groups.len() > 1
+                && (4..=8).contains(&digits)
+                && groups.iter().all(|n| *n == groups[0]);
+            if grouped {
+                value = chars[start..end]
+                    .iter()
+                    .filter(|c| c.is_ascii_digit())
+                    .collect();
+                i = end;
+            } else if groups.len() > 1 {
+                // 无效的长数字分组不能拆出一个看似有效的四位前缀。
+                i = end;
+                continue;
+            } else {
+                end = i;
+            }
+        }
+        if !is_code_like(&value) {
             continue;
         }
-        if is_code_like(&token) {
-            out.push((start, token));
+        // 排除标识符片段、链接、邮箱、金额、小数和带单位的数字。
+        let before = start.checked_sub(1).map(|n| chars[n]);
+        let after = chars.get(end).copied();
+        if before.is_some_and(|c| matches!(c, '_' | '/' | '@' | '=' | '.' | '$' | '¥' | '￥' | '€'))
+            || after.is_some_and(|c| matches!(c, '_' | '/' | '@' | '年' | '月' | '日' | '元' | '秒' | '分'))
+            // 句末句点允许；小数或域名中的点禁止。
+            || after == Some('.') && chars.get(end + 1).is_some_and(|c| c.is_ascii_alphanumeric())
+        {
+            continue;
         }
+        let numeric_len = value.chars().filter(char::is_ascii_digit).count();
+        out.push(Candidate {
+            span: Span { start, end },
+            strong_only: grouped
+                || numeric_len == 4 && value.chars().all(|c| c.is_ascii_digit() || c == '-'),
+            value,
+        });
     }
     out
 }
 
-/// 判断一个 token 是否像验证码。
 fn is_code_like(token: &str) -> bool {
-    // 去掉分组连字符后再评估长度与字符集。
-    let compact: String = token.chars().filter(|c| *c != '-').collect();
-    let len = compact.chars().count();
-    if !(4..=8).contains(&len) {
+    let groups: Vec<&str> = token.split('-').collect();
+    if groups.iter().any(|g| g.is_empty()) {
         return false;
     }
-
-    let all_digits = compact.chars().all(|c| c.is_ascii_digit());
-    if all_digits {
-        // 4 位数字太容易是年份、金额、端口，不猜。
-        return len != 4;
-    }
-
-    // 字母数字混合：全大写（或数字）。
-    let has_alpha = compact.chars().any(|c| c.is_ascii_uppercase());
-    let has_digit = compact.chars().any(|c| c.is_ascii_digit());
-    let upper_ok = compact
-        .chars()
-        .all(|c| c.is_ascii_digit() || c.is_ascii_uppercase());
-    if !upper_ok || !has_alpha {
+    let compact = groups.concat();
+    if !(4..=8).contains(&compact.len())
+        || !compact
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+    {
         return false;
     }
-
-    // 含数字：`A1B2C3`、`XYZ789` 这类基本可信。
-    if has_digit {
-        return true;
+    if compact.bytes().all(|b| b.is_ascii_digit()) {
+        // 数字连字符只接受等长两组，避免把 2026-11-06 当作八位码。
+        return groups.len() == 1 || groups.len() == 2 && groups[0].len() == groups[1].len();
     }
-
-    // 纯字母：只有带分组连字符时才接受（`BFM-GXB`）。
-    // 否则 `THANKS`、`PLEASE`、`VERIFY` 这些普通单词会被误判成验证码。
-    compact.len() != token.chars().count()
+    compact.bytes().any(|b| b.is_ascii_digit()) || groups.len() > 1
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::Code;
+
+    fn extract(subject: &str, body: &str) -> Option<Code> {
+        super::extract(subject, "", body)
+    }
 
     #[test]
     fn finds_code_after_chinese_keyword() {
@@ -263,11 +439,29 @@ mod tests {
     #[test]
     fn real_world_samples() {
         // 常见服务商的真实格式。
-        assert_eq!(extract("Your verification code is 482913", "").unwrap().value, "482913");
+        assert_eq!(
+            extract("Your verification code is 482913", "")
+                .unwrap()
+                .value,
+            "482913"
+        );
         assert_eq!(extract("验证码：839201", "").unwrap().value, "839201");
-        assert_eq!(extract("您的验证码为 668899，5 分钟内有效", "").unwrap().value, "668899");
-        assert_eq!(extract("Apple ID Code: 123456", "").unwrap().value, "123456");
-        assert_eq!(extract("", "Your verification code is 482913").unwrap().value, "482913");
+        assert_eq!(
+            extract("您的验证码为 668899，5 分钟内有效", "")
+                .unwrap()
+                .value,
+            "668899"
+        );
+        assert_eq!(
+            extract("Apple ID Code: 123456", "").unwrap().value,
+            "123456"
+        );
+        assert_eq!(
+            extract("", "Your verification code is 482913")
+                .unwrap()
+                .value,
+            "482913"
+        );
         // 只有孤立的「Use 482913 to sign in.」时没有验证码上下文，不猜。
         assert!(extract("", "Use 482913 to sign in.").is_none());
 
@@ -278,9 +472,10 @@ mod tests {
     }
 
     #[test]
-    fn ignores_four_digit_numbers() {
-        // 4 位数字太像年份/端口/金额，宁可漏掉也不误报。
-        assert!(extract("验证码 2024", "").is_none());
+    fn accepts_four_digits_only_with_verification_context() {
+        assert_eq!(extract("验证码 2024", "").unwrap().value, "2024");
+        assert!(extract("Copyright 2024", "").is_none());
+        assert!(extract("Code 2024", "").is_none());
         // 6 位仍然正常。
         assert_eq!(extract("验证码 202400", "").unwrap().value, "202400");
     }
@@ -305,16 +500,11 @@ mod tests {
         assert_eq!(c.value, "123456");
     }
 
-
     #[test]
     fn real_nediya_email_after_parse() {
         // 用户提供的原始 eml：text/html + quoted-printable，走完整解析链路。
         let raw = include_bytes!("../tests/fixtures/nediya.eml");
         let parsed = crate::mail::parse(raw, 256 * 1024).expect("eml 应能解析");
-
-        println!("subject   = {:?}", parsed.subject);
-        println!("text_body = {:?}", parsed.text_body);
-        println!("html 前 200 = {:?}", &parsed.html_body[..parsed.html_body.len().min(200)]);
 
         // 推送侧优先用 text_body，没有才退回 html_body——两种都要能提取。
         let from_text = extract(&parsed.subject, &parsed.text_body).expect("纯文本路径应能提取");
@@ -360,7 +550,7 @@ mod tests {
 
     #[test]
     fn does_not_treat_short_words_as_codes() {
-        // 纯字母码要求至少 5 位，避免 OK / PDF 之类误报。
+        // 短单词不能作为验证码。
         assert!(extract("confirmation code: OK", "").is_none());
     }
 
@@ -385,7 +575,11 @@ mod tests {
             ("", "Your access code is 123456", "123456"),
             ("", "Your authentication code is 123456", "123456"),
             ("", "Your temporary password is 123456", "123456"),
-            ("", "Please enter the verification code sent to your phone: 123456", "123456"),
+            (
+                "",
+                "Please enter the verification code sent to your phone: 123456",
+                "123456",
+            ),
             // 验证码在主题、关键词在正文的常见写法。
             ("123456 is your verification code", "", "123456"),
         ] {
@@ -399,7 +593,7 @@ mod tests {
 
     #[test]
     fn english_false_positives_stay_rejected() {
-        // PIN 通常是 4 位，按「不猜 4 位」的规则本就不识别。
+        // 没有明确的一次性验证语境时不猜 PIN。
         assert!(extract("", "Your PIN is 1234").is_none());
         // 没有关键词锚定时不能瞎猜，否则正文里任意数字都会被当成验证码。
         assert!(extract("", "Use 123456 to verify your email address").is_none());
@@ -409,5 +603,201 @@ mod tests {
     fn handles_case_insensitive_keyword() {
         assert!(extract("VERIFICATION CODE 998877", "").is_some());
         assert!(extract("Verification Code 998877", "").is_some());
+    }
+
+    #[test]
+    fn ranks_codes_by_context_and_character_distance() {
+        for text in [
+            "482913 是您的验证码，订单号 998877",
+            "订单号 998877，验证码为 482913",
+            "482913 是您的验证码，998877 是订单号",
+            "482913 是您的验证码，参考数字是 998877",
+            "优惠码 998877，登录码：482913",
+            "Postal code 100001. Your verification code is 482913",
+            "Error code 998877. Verification code: 482913",
+            "Verification code: 482913. Order 998877",
+            "482913 is your verification code, reference number 998877",
+        ] {
+            assert_eq!(
+                extract(text, "").map(|c| c.value),
+                Some("482913".into()),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            extract("security code: 482913", "").unwrap().label,
+            "安全码"
+        );
+        assert!(extract("验证码：111222；验证码：333444", "").is_none());
+        assert_eq!(
+            extract("验证码：111222；验证码：111222", "").unwrap().value,
+            "111222"
+        );
+    }
+
+    #[test]
+    fn rejects_unrelated_codes_and_identifier_fragments() {
+        for text in [
+            "Your postal code is 100001",
+            "Your postcode is 100001",
+            "Your barcode is 12345678",
+            "ZIP code: 100001",
+            "Coupon code: SAVE20",
+            "Discount code: SALE20",
+            "Promo code: SALE20",
+            "Order confirmation number: 123456",
+            "Booking confirmation code: 123456",
+            "HTTP error code 123456",
+            "Product code: A1B2C3",
+            "Verification code delivery failed. Order number: 998877",
+            "验证码邮件发送失败，订单号 998877",
+            "验证码邮件发送失败，金额 123456元",
+            "code: 123456_suffix",
+            "code: prefix_123456",
+            "code: 123456@example.test",
+            "code: https://example.test/123456",
+            "code: https://example.test/?id=123456",
+            "code: 123456.78",
+            "code: $123456",
+            "code: 2026-11-06",
+            "verification code: 1234 5678 9012",
+            "verification code: 2026 11 06",
+            "Your HOTP: 123456",
+            "Your OTP_backup: 123456",
+        ] {
+            assert!(extract(text, "").is_none(), "不能误提取: {text}");
+        }
+        assert_eq!(extract("Your OTP: 482913.", "").unwrap().value, "482913");
+    }
+
+    #[test]
+    fn supports_short_and_spaced_codes_with_strong_context() {
+        for (text, want) in [
+            ("验证码：4937", "4937"),
+            ("4937 是您的验证码", "4937"),
+            ("Your verification code is 0042", "0042"),
+            ("Your login code is 123 456", "123456"),
+            ("验证码：1 2 3 4 5 6", "123456"),
+            ("验证码：12 34 56", "123456"),
+            ("验证码：1234 5678", "12345678"),
+            ("Your verification code is 123\u{00a0}456", "123456"),
+            ("验证码：12-34", "12-34"),
+        ] {
+            assert_eq!(extract(text, "").unwrap().value, want, "{text}");
+        }
+        for text in [
+            "Code: 4937",
+            "Code: 123 456",
+            "验证码：123\n456",
+            "验证码：123\r\n456",
+        ] {
+            assert!(super::extract("", text, "").is_none(), "{text}");
+        }
+        assert_eq!(
+            super::extract("", "验证码：123456 10分钟内有效", "")
+                .unwrap()
+                .value,
+            "123456"
+        );
+    }
+
+    #[test]
+    fn html_boundaries_entities_and_inline_digits() {
+        for html in [
+            "<p>验证码</p><div>482913</div><div>10分钟内有效</div>",
+            "<p>验证码</p><table><tr><td>482913</td><td>10分钟内有效</td></tr></table>",
+            "<p>验证码：<span>4</span><b>8</b><span>2913</span></p>",
+            "<p>verification <b>code</b>: 482913</p>",
+            "<div title='>123456'>验证码：482913</div>",
+            "<!-- fake > verification code: 111111 --><STYLE>.x{color:#222222}</STYLE><SCRIPT>code=333333</SCRIPT><p>验证码：482913</p>",
+            "<p>验证码：&#52;&#56;&#50;&#57;&#49;&#51;</p>",
+            "<p>验证码：482&nbsp;913</p>",
+        ] {
+            assert_eq!(
+                super::extract("", "", html).unwrap().value,
+                "482913",
+                "{html}"
+            );
+        }
+        assert!(super::extract("验证码", "", "<p>123</p><p>456</p>").is_none());
+        assert_eq!(
+            super::extract("验证码：482913", "", "A&B中文测试邮件")
+                .unwrap()
+                .value,
+            "482913"
+        );
+        assert_eq!(
+            super::extract("", "", "A&B中文测试邮件，验证码：482913")
+                .unwrap()
+                .value,
+            "482913"
+        );
+    }
+
+    #[test]
+    fn falls_back_to_html_and_keeps_plain_text_literal() {
+        assert_eq!(
+            super::extract(
+                "登录验证",
+                "请使用 HTML 客户端阅读。",
+                "<p>验证码：4937</p>"
+            )
+            .unwrap()
+            .value,
+            "4937"
+        );
+        assert_eq!(
+            super::extract("", "Your postal code is 100001", "<p>验证码：482913</p>")
+                .unwrap()
+                .value,
+            "482913"
+        );
+        assert_eq!(
+            super::extract("", "验证码 <4937>", "").unwrap().value,
+            "4937"
+        );
+        assert_eq!(
+            super::extract("", "验证码：111222", "<p>验证码：333444</p>")
+                .unwrap()
+                .value,
+            "111222"
+        );
+        assert_eq!(
+            super::extract("验证码：555666", "验证码：111222", "<p>验证码：333444</p>")
+                .unwrap()
+                .value,
+            "555666"
+        );
+    }
+
+    #[test]
+    fn does_not_extract_partial_tokens_at_search_limits() {
+        let text = format!(
+            "{}123456789012345678901234567890 verification code",
+            "中".repeat(70)
+        );
+        assert!(super::extract("", &text, "").is_none());
+        let text = format!("verification code{}1234567890123456", " ".repeat(115));
+        assert!(super::extract("", &text, "").is_none());
+        let text = format!(
+            "{}verification code: 12345678901234567890",
+            " ".repeat(3975)
+        );
+        assert!(super::extract("", &text, "").is_none());
+        let text = format!("{}验证码：482913", "测试内容。".repeat(500));
+        assert_eq!(super::extract("", &text, "").unwrap().value, "482913");
+    }
+
+    #[test]
+    fn html_only_mime_keeps_expiry_separate() {
+        let raw = b"From: sender@example.test\r\nSubject: Login\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Verification code</p><div>482913</div><div>10 minutes</div>";
+        let mail = crate::mail::parse(raw, 256 * 1024).unwrap();
+        assert!(!mail.text_body.contains("48291310"));
+        assert_eq!(
+            super::extract(&mail.subject, &mail.text_body, &mail.html_body)
+                .unwrap()
+                .value,
+            "482913"
+        );
     }
 }

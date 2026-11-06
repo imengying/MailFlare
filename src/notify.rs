@@ -1,6 +1,6 @@
 //! 新邮件推送：Telegram Bot 与 Bark。
 //!
-//! 跑在 `wait_until()` 里，两个渠道并发、各自带超时，失败只记日志。
+//! 验证码由持久化任务按渠道调用；每次请求带超时，失败交给任务重试。
 
 use std::time::Duration;
 
@@ -18,7 +18,6 @@ const TG_TEXT_LIMIT: usize = 3500;
 /// 推送摘要。不复用 `EmailDetail`：正文可能几百 KB，通知只要一小段预览。
 #[derive(Debug, Clone)]
 pub struct PushEmail {
-    pub id: String,
     pub sender: String,
     pub subject: String,
     /// 提取到的验证码。推送只为验证码服务，没有它就不会走到这里。
@@ -481,8 +480,7 @@ fn test_telegram_text() -> String {
 
 /// 测试推送：给每个已启用的渠道发一条固定消息，并回报各自结果。
 ///
-/// 和 `dispatch` 的区别：这里**不做验证码过滤**，也不并发——串行更好定位
-/// 到底是哪个渠道失败。返回明细给设置页展示，用户不用去翻日志。
+/// 直接发送固定验证码，不进入收信通知队列；逐个返回结果，供设置页定位失败渠道。
 pub async fn test_push(settings: &Settings) -> (ChannelResult, ChannelResult) {
     let telegram = if settings.telegram_enabled {
         send_telegram_text(settings, test_telegram_text()).await
@@ -534,30 +532,12 @@ pub async fn load_push_log(db: &worker::D1Database) -> Option<PushLog> {
     serde_json::from_str(&raw).ok()
 }
 
-fn push_succeeded(results: &[ChannelResult]) -> bool {
-    results.iter().any(|r| matches!(r, ChannelResult::Ok))
-        && !results
-            .iter()
-            .any(|r| matches!(r, ChannelResult::Failed(_)))
-}
-
-/// 并发推送验证码；未启用的渠道不影响结果，全部跳过时不算成功。
-pub async fn dispatch(ctx: &PushContext<'_>) -> bool {
-    let (telegram, bark) = futures_util::join!(push_telegram(ctx), push_bark(ctx));
-    let results = [telegram, bark];
-    // 日志带上邮件 id，便于区分「没推」和「推失败」。
-    for (name, result) in ["telegram", "bark"].into_iter().zip(&results) {
-        match result {
-            ChannelResult::Failed(msg) => {
-                console_error!("[mailflare] {name} 推送失败 ({}): {msg}", ctx.email.id);
-            }
-            ChannelResult::Ok => {
-                console_log!("[mailflare] {name} 推送成功 ({})", ctx.email.id);
-            }
-            ChannelResult::Skipped => {}
-        }
+pub async fn send_channel(ctx: &PushContext<'_>, channel: &str) -> ChannelResult {
+    match channel {
+        "telegram" => push_telegram(ctx).await,
+        "bark" => push_bark(ctx).await,
+        _ => ChannelResult::Skipped,
     }
-    push_succeeded(&results)
 }
 
 // ===========================================================================
@@ -573,7 +553,6 @@ pub enum InboundFailure {
     /// 邮件体积超过「单封邮件上限」
     TooLarge,
     /// 解析失败（畸形邮件）
-    Unparsable,
     /// D1 或 R2 等后端写入异常
     StorageError,
 }
@@ -582,7 +561,6 @@ impl InboundFailure {
     fn label(self) -> &'static str {
         match self {
             Self::TooLarge => "邮件过大",
-            Self::Unparsable => "解析失败",
             Self::StorageError => "存储异常",
         }
     }
@@ -707,18 +685,6 @@ mod tests {
     use futures_util::FutureExt;
 
     #[test]
-    fn channel_results_require_all_active_channels_to_succeed() {
-        use ChannelResult::{Failed, Ok, Skipped};
-        assert!(push_succeeded(&[Ok, Skipped]));
-        assert!(push_succeeded(&[Skipped, Ok]));
-        assert!(push_succeeded(&[Ok, Ok]));
-        assert!(!push_succeeded(&[Skipped, Skipped]));
-        assert!(!push_succeeded(&[Ok, Failed("Bark failed".into())]));
-        assert!(!push_succeeded(&[Failed("Telegram failed".into()), Ok]));
-        assert!(!push_succeeded(&[Skipped, Failed("Bark failed".into())]));
-    }
-
-    #[test]
     fn disabled_channels_skip_test_push_without_network() {
         let (telegram, bark) = test_push(&Settings::default()).now_or_never().unwrap();
         assert!(matches!(telegram, ChannelResult::Skipped));
@@ -778,7 +744,6 @@ mod tests {
 
     fn email() -> PushEmail {
         PushEmail {
-            id: "id1".into(),
             sender: "GitHub <noreply@github.com>".into(),
             subject: "Your verification code".into(),
             code: Code {

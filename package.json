@@ -12,11 +12,17 @@
     "dev": "bun run scripts/build.ts --watch",
     "deploy": "bash scripts/build.sh && bun run scripts/deploy.ts",
     "lint": "cargo clippy --all-targets --target wasm32-unknown-unknown -- -D warnings",
-    "test": "cargo test && bun run check && bun run check:render",
-    "clean": "rm -rf build .cache public/index.html"
+    "test": "cargo test && bun run check && bun run check:list && bun run check:render && bun run check:ui",
+    "clean": "rm -rf build .cache public/index.html",
+    "check:list": "bun run scripts/check-list.ts",
+    "check:integration": "node scripts/check-integration.mjs",
+    "backup": "bun run scripts/backup.ts",
+    "check:ui": "bun run build:frontend && bun run scripts/check-ui.ts"
   },
   "devDependencies": {
     "@types/bun": "1.4.4",
+    "miniflare": "5.20261103.0-beta",
+    "playwright-core": "1.64.1",
     "typescript": "7.0.2",
     "wrangler": "4.157.0"
   },

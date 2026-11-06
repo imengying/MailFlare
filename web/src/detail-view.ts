@@ -8,7 +8,7 @@
 import type { EmailDetail } from "./api-types.ts";
 import { create, formatSize, isMobile } from "./dom.ts";
 import { icon } from "./icons.ts";
-import { buildSrcdoc, hasRemoteImages, htmlToText } from "./mail-render.ts";
+import { buildSrcdoc, hasRemoteImages } from "./mail-render.ts";
 import type { AppState } from "./state.ts";
 import { senderInitial, senderTone } from "./sender.ts";
 import { emptyState } from "./ui.ts";
@@ -20,6 +20,7 @@ export interface DetailHandlers {
   onMarkUnread(id: string): void;
   /** 删除。 */
   onDelete(id: string): void;
+  onRestore(id: string): void;
 }
 
 /** 详情加载中的骨架屏。 */
@@ -86,13 +87,18 @@ export function renderDetail(state: AppState, handlers: DetailHandlers): void {
     timeRow.append(
       create("span", {
         className: `push-badge ${ok ? "ok" : "failed"}`,
-        textContent: ok ? "已推送" : "推送失败",
-        title: ok ? "验证码已发送到通知渠道" : "验证码推送失败，可在设置页查看原因",
+        textContent: ok ? "已推送" : detail.push_status === "pending" ? "等待推送重试" : "推送失败",
+        title: ok ? "验证码已发送到通知渠道" : detail.push_status === "pending" ? "系统将限时重试失败的渠道" : "验证码推送未完成，可在设置页测试通知渠道",
       }),
     );
   }
   info.append(meta, timeRow);
   head.append(metaWrap);
+  if (detail.storage_status !== "complete") {
+    head.append(create("p", { textContent: detail.storage_status === "pending"
+      ? "部分附件暂时未保存，系统正在重试。你可以下载原始邮件查看完整内容。"
+      : "彻底删除尚未完成，请再次点击彻底删除以继续清理。" }));
+  }
 
   pane.replaceChildren(head);
   renderDetailBody(state, handlers);
@@ -107,14 +113,27 @@ function buildActions(detail: EmailDetail, handlers: DetailHandlers): HTMLElemen
   back.addEventListener("click", leaveDetail);
   actions.append(back);
 
-  const unreadBtn = create("button", { className: "btn sm", type: "button", textContent: "标为未读", title: "标为未读" });
-  unreadBtn.prepend(icon("mail"));
-  unreadBtn.addEventListener("click", () => handlers.onMarkUnread(detail.id));
-
-  const deleteBtn = create("button", { className: "btn sm danger", type: "button", textContent: "删除", title: "删除邮件" });
+  const deleteLabel = detail.deleted_at !== null ? "彻底删除" : "删除";
+  const deleteBtn = create("button", { className: "btn sm danger", type: "button", textContent: deleteLabel, title: deleteLabel });
   deleteBtn.prepend(icon("trash"));
   deleteBtn.addEventListener("click", () => handlers.onDelete(detail.id));
-  actions.append(unreadBtn, deleteBtn);
+  if (detail.deleted_at !== null) {
+    const restore = create("button", { className: "btn sm", type: "button", textContent: "恢复" });
+    restore.disabled = detail.storage_status === "purging";
+    restore.addEventListener("click", () => handlers.onRestore(detail.id));
+    actions.append(restore);
+  } else {
+    const unreadBtn = create("button", { className: "btn sm", type: "button", textContent: "标为未读", title: "标为未读" });
+    unreadBtn.prepend(icon("mail"));
+    unreadBtn.addEventListener("click", () => handlers.onMarkUnread(detail.id));
+    actions.append(unreadBtn);
+  }
+  if (detail.original_url) {
+    const download = create("a", { className: "btn sm", textContent: "导出原文", href: detail.original_url });
+    download.setAttribute("download", `${detail.id}.eml`);
+    actions.append(download);
+  }
+  actions.append(deleteBtn);
   return actions;
 }
 
@@ -124,34 +143,13 @@ export function renderDetailBody(state: AppState, handlers: DetailHandlers): voi
   const pane = document.querySelector<HTMLElement>("#detail-pane");
   if (!detail || !pane) return;
 
-  // 只替换 body-wrap，保留头部，避免切换 tab 时头部闪一下。
+  // 只替换正文，保留头部，避免放开图片时头部闪烁。
   pane.querySelectorAll(".body-wrap").forEach((node) => node.remove());
 
   const wrap = create("div", { className: "body-wrap" });
-  const bar = buildBodyToolbar(state, detail, handlers);
-  if (bar) wrap.append(bar);
   wrap.append(buildBody(state, handlers));
   wrap.append(...buildAttachments(detail));
   pane.append(wrap);
-}
-
-/**
- * 正文上方的工具栏。
- *
- * 已去掉「HTML / 纯文本」切换与「复制 Message-ID」：格式由后端字段决定，
- * 用户不需要也不关心。这里只剩下「显示图片」提示，没内容时返回 null。
- */
-function buildBodyToolbar(
-  state: AppState,
-  detail: EmailDetail,
-  handlers: DetailHandlers,
-): HTMLElement | null {
-  if (!detail.html_body) return null;
-  const bar = create("div", { className: "body-toolbar" });
-  if (hasRemoteImages(detail.html_body) && !state.allowRemoteImages) {
-    bar.append(buildImageBar(handlers));
-  }
-  return bar.childElementCount > 0 ? bar : null;
 }
 
 /** 正文区域。 */
@@ -174,12 +172,6 @@ function buildBody(state: AppState, handlers: DetailHandlers): HTMLElement {
     return box;
   }
 
-  if (detail.html_body) {
-    // 没有纯文本正文时，从 HTML 提取文本。
-    box.append(create("pre", { className: "text-body", textContent: htmlToText(detail.html_body) }));
-    return box;
-  }
-
   box.append(emptyState("没有正文", "这封邮件只包含附件或正文为空"));
   return box;
 }
@@ -187,13 +179,9 @@ function buildBody(state: AppState, handlers: DetailHandlers): HTMLElement {
 /** 「已阻止远程图片」提示条。 */
 function buildImageBar(handlers: DetailHandlers): HTMLElement {
   const bar = create("div", { className: "imgbar" });
-  bar.append(
-    (() => {
-      const text = create("span", { textContent: "已阻止远程图片，避免泄露你的 IP" });
-      text.prepend(icon("shield"));
-      return text;
-    })(),
-  );
+  const text = create("span", { textContent: "已阻止远程图片，避免泄露你的 IP" });
+  text.prepend(icon("shield"));
+  bar.append(text);
   const button = create("button", {
     className: "btn sm",
     type: "button",
@@ -309,7 +297,7 @@ function buildAttachments(detail: EmailDetail): HTMLElement[] {
 }
 
 /** 移动端返回列表。 */
-export function leaveDetail(): void {
+function leaveDetail(): void {
   if (isMobile()) {
     document.querySelector("#app-view")?.classList.remove("showing");
   }

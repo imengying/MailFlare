@@ -7,7 +7,7 @@
 //! 解码由 mail-parser 内部完成（已开启 `full_encoding`），因此 GBK / GB2312 /
 //! GB18030 / Big5 等中文编码的标题与正文都能正确还原。
 
-use mail_parser::{MessageParser, MimeHeaders};
+use mail_parser::{MessageParser, MimeHeaders, PartType};
 
 use crate::db::AttachmentMeta;
 
@@ -56,7 +56,10 @@ fn format_address(addr: &mail_parser::Address<'_>) -> String {
 
 /// 去掉 Content-ID 两端的尖括号：`<abc@x>` -> `abc@x`。
 fn normalize_cid(raw: &str) -> String {
-    raw.trim().trim_start_matches('<').trim_end_matches('>').to_string()
+    raw.trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .to_string()
 }
 
 /// 兜底文件名：`附件-3.png`，保证扩展名尽量保留。
@@ -102,11 +105,15 @@ pub fn parse(raw: &[u8], max_body_bytes: usize) -> Option<ParsedEmail> {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "(无主题)".to_string());
 
-    // body_html(0) / body_text(0) 会返回 `Cow`：未超限时可能是借用的切片，
-    // 这里统一 `into_owned()` 以便跨 await 使用（只发生一次拷贝）。
+    // HTML 转文本保留块级边界，避免验证码与下一段有效期的数字粘连。
     let text_body = message
-        .body_text(0)
-        .map(|c| crate::util::truncate_utf8(c.into_owned(), max_body_bytes))
+        .text_part(0)
+        .and_then(|part| match &part.body {
+            PartType::Text(text) => Some(text.to_string()),
+            PartType::Html(html) => Some(crate::db::html_to_text(html)),
+            _ => None,
+        })
+        .map(|text| crate::util::truncate_utf8(text, max_body_bytes))
         .unwrap_or_default();
 
     let html_body = message
@@ -136,8 +143,12 @@ pub fn parse(raw: &[u8], max_body_bytes: usize) -> Option<ParsedEmail> {
             let disposition_inline = part
                 .content_disposition()
                 .is_some_and(|cd| cd.c_type.eq_ignore_ascii_case("inline"));
-            let cid = part.content_id().map(normalize_cid).filter(|s| !s.is_empty());
-            let inline = disposition_inline || (cid.is_some() && content_type.starts_with("image/"));
+            let cid = part
+                .content_id()
+                .map(normalize_cid)
+                .filter(|s| !s.is_empty());
+            let inline =
+                disposition_inline || (cid.is_some() && content_type.starts_with("image/"));
 
             RawAttachment {
                 filename,
@@ -159,7 +170,12 @@ pub fn parse(raw: &[u8], max_body_bytes: usize) -> Option<ParsedEmail> {
     Some(ParsedEmail {
         message_id: message
             .message_id()
-            .map(|s| s.trim().trim_start_matches('<').trim_end_matches('>').to_string())
+            .map(|s| {
+                s.trim()
+                    .trim_start_matches('<')
+                    .trim_end_matches('>')
+                    .to_string()
+            })
             .filter(|s| !s.is_empty()),
         sender,
         recipient,

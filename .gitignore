@@ -28,3 +28,6 @@ node_modules/
 # NOTE: Cargo.lock 与 bun.lock 都要提交。
 # Cloudflare Workers Builds 每次部署都在云端重新解析依赖，
 # lockfile 保证构建可复现、不会因为上游发布新版本而突然失败。
+
+# 本地邮件备份
+/backups/

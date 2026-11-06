@@ -2,15 +2,15 @@
 
 极简的**单用户**个人邮件系统。一个 Cloudflare Worker 同时收信和当后台：
 
-- **收信**：Email Routing → `mail-parser` 零拷贝解析 → 附件写 R2 → 元数据入库 D1 → `waitUntil()` 提取验证码并推送 Telegram / Bark
+- **收信**：Email Routing → 保留原始 EML → 解析与附件转存 → D1 入库 → 持久化任务推送 Telegram / Bark
 - **管理**：Rust API + 内嵌单页前端，用户名 + 密码 + Turnstile 登录，无状态 JWT（HS256）
-- **存储**：邮件正文与元数据进 D1（`configs` / `emails`），附件字节进 R2（S3 API）
+- **存储**：邮件正文与元数据进 D1（`configs` / `emails`），原始 EML 与附件字节进 R2（S3 API）
 
 ```
    SMTP ──► Email Routing ──► #[event(email)]
-                                ├─► R2   mail/{id}/{n}（S3 API）
+                                ├─► R2   mail/{id}/original.eml + mail/{id}/{n}
                                 ├─► D1   emails
-                                └─► waitUntil() ──► Telegram ‖ Bark
+                                └─► D1 任务 + waitUntil / Cron ──► Telegram / Bark
 
    Browser ──► /api/*  ──► #[event(fetch)] ──► D1 / R2
            └─► 其它路径 ──► [assets] 单页前端
@@ -47,7 +47,7 @@ Access Key ID / Secret Access Key（权限选 **Object Read & Write**，
 `bun run deploy` 会依次完成：
 
 1. **创建 D1 数据库**（已存在则跳过）
-2. **执行 `migrations/` 下的建表 SQL**（已执行过的不会重跑）
+2. **执行 `migrations/` 下未应用的 SQL**（`0001` 建库，`0002` 包含本次全部数据库改动，已执行过的不会重跑）
 3. 上传 Worker
 
 所以 **D1 与表结构都是自动建好的**，不需要去控制台 Create，也不用粘 SQL。
@@ -58,10 +58,14 @@ R2 的四项配置（见第 6 步）在网页里填。
 | 内容 | 位置 |
 |---|---|
 | 发件人、收件人、主题、纯文本正文、HTML 正文、附件元数据 | **D1** `emails` 表 |
-| 附件原始字节 | **R2** `att/{id}/{index}` |
+| 附件字节 | **R2** `mail/{id}/{index}` |
+| 完整 MIME 原文 | **R2** `mail/{id}/original.eml` |
 
-邮件正文完整保留在 D1（超长时按设置里的「正文入库上限」截断），
-R2 只承担附件，这样 D1 的单行长度不会被附件撑爆。
+D1 的正文按设置里的「正文入库上限」截断；配置完整的 R2 后，新邮件的完整原文另存为 EML，包含超过独立附件大小上限的部件。升级前的历史原文无法补回。
+
+首次收信会先登记恢复任务，再保存原文。附件或入库失败后，Cron 每分钟检查任务并退避重试；附件未恢复时详情页会提示。没有配置 R2 时只保存正文与元数据，无法保留附件或提供原文恢复。
+
+暂时性故障会向运行时报告错误，不调用永久拒收。若 D1 或原文保存步骤失败，不能保证上游 SMTP 自动重投，请检查 Worker 日志；本项目不会把运行时异常当作已经验证的 SMTP 重试承诺。
 
 ### 4. 设三个 Secret
 
@@ -90,6 +94,10 @@ R2 只承担附件，这样 D1 的单行长度不会被附件撑爆。
 **MailFlare 自身不限制收件地址**：只要邮件被路由到本 Worker，发往本域
 **任意地址**都会收下并入库，不需要在这里事先注册或创建邮箱。
 （`anyone@你的域名`、`noreply@你的域名` 都会进同一个收件箱。）
+
+邮件按 **Message-ID + 信封收件地址** 去重：同一封信投给两个别名时分别保存，
+投给同一地址的重复邮件只保留一份。收件地址以实际投递的信封地址为准，
+不依赖邮件正文里的 To / Cc 头；没有 Message-ID 时按原文字节和信封收件地址识别重复。
 
 > Email Routing 侧仍需把地址指过来。逐个添加很麻烦时，用
 > **Email Routing → Routes → Catch-all address** 设为 *Send to a Worker*，
@@ -125,6 +133,26 @@ Bark 在「设置 → 消息通知」里启用：服务地址默认 `https://api
 也可以填写自建服务的根地址；Device Key 单独填写，留空保存不会覆盖已存的 Key。
 保存后点击「测试」检查通知。验证码推送和收信失败告警都会使用已启用的渠道。
 
+验证码提取由详情页与通知共用：依次检查主题、纯文本和 HTML，支持数字、大写字母数字混合及连字符分组码。4 位数字和空格分组码只在明确的验证语境下识别；空格分组会合并成连续数字，保留前导零。邮编、订单号、优惠码等语境会被排除；同等可信但不同的候选不自动选取。每部分最多分析前 4000 个文本字符，复杂排版或缺少验证关键词的邮件仍可能漏提，可查看原文。
+
+验证码按渠道独立处理：成功渠道不重发，失败渠道最多尝试 3 轮，间隔 1、2 分钟；从实际收信起超过 10 分钟就停止。渠道禁用或邮件已进回收站时跳过。网络请求超时或进程在发送成功后中断，可能出现重复通知，无法保证恰好一次送达。渠道原有的 POST/GET 或格式兼容回退可能在一轮中发起多个请求。
+
+## 回收站、导出与备份
+
+邮件详情中的「删除」移入回收站，可随时恢复；「彻底删除」需要再次确认，清理原文、附件和数据库记录。没有自动清空期限。尚在恢复的邮件暂时不能彻底删除；清理中途失败时保留记录，可再次点击「彻底删除」继续。
+
+详情中的「导出原文」下载原始 `.eml`。全量备份包含收件箱与回收站、未改写的正文/元数据、原文和已保存附件，不读取设置或推送密钥：
+
+```bash
+export MAILFLARE_URL='https://你的邮箱域名'
+# 在本机环境中设置 MAILFLARE_TOKEN 为已登录会话的 token，不要提交或分享它。
+bun run backup ./backups/2026-11-06
+```
+
+Token 可在登录后的浏览器开发者工具 Application → Local Storage → `mf_token` 读取。备份目录必须不存在；失败的备份没有 `manifest.json` 完成标记。历史缺失原文或未保存附件会列在该文件的 `missing` 中。原始邮件和附件可交给其他邮件客户端或脚本恢复，当前没有一键导回 MailFlare 的界面。备份期间尽量暂停删除、恢复等操作，它是分页导出而非数据库事务快照。
+
+需要包含全部后台设置的灾难恢复备份时，另行使用 Cloudflare D1 导出并备份 R2 桶；D1 导出含密钥，应保存在私人加密存储。不要给 `mail/` 设置会自动过期删除有效邮件原文的桶生命周期规则。
+
 ---
 
 ## 云端构建说明
@@ -148,7 +176,7 @@ Bark 在「设置 → 消息通知」里启用：服务地址默认 `https://api
 
 ## 本地开发
 
-需要 Bun 1.4.4+ 与 Rust（`rust-toolchain.toml` 会自动装 target）。
+需要 Bun 1.4.4+ 与 Rust（`rust-toolchain.toml` 会自动装 target）。浏览器测试默认使用 `/usr/bin/chromium`，可通过 `CHROMIUM_PATH` 指定已有 Chrome/Chromium。集成测试使用 Node.js 22+，必须先完成 `bun run build`；所有 R2、Bark、Telegram 请求都由本地模拟服务接管。
 
 ```bash
 bun install --frozen-lockfile
@@ -164,7 +192,9 @@ bunx wrangler dev                # 另开一个终端起本地 Worker
 | `bun run build:frontend` | 只构建前端 |
 | `bun run dev` | 前端监听重建 |
 | `bun run deploy` | 构建后部署 |
-| `bun run test` | Rust 测试 + TS 类型检查 + 渲染自检 |
+| `bun run test` | Rust + TS + 列表竞态 + 真实浏览器安全与界面测试 |
+| `bun run check:integration` | 构建后用 Miniflare 验证迁移、回收站、存储故障与通知重试 |
+| `bun run backup <新目录>` | 导出收件箱、回收站、原文及附件 |
 | `bun run lint` | clippy `-D warnings` |
 | `bun run clean` | 清理产物 |
 
@@ -190,14 +220,15 @@ bunx wrangler dev                # 另开一个终端起本地 Worker
 ```
 MailFlare/
 ├── src/                       # 后端（Rust 2024 + workers-rs）
-│   ├── lib.rs                 # fetch / email 事件入口
+│   ├── lib.rs                 # fetch / email / scheduled 事件入口
 │   ├── api.rs                 # HTTP 路由与 handler
 │   ├── auth.rs                # 凭证校验、Turnstile、JWT
 │   ├── config.rs              # 环境变量（3 项）+ D1 设置
 │   ├── db.rs                  # D1 数据访问
 │   ├── inbound.rs             # 收信流水线
+│   ├── jobs.rs                # 原文恢复与通知重试任务
 │   ├── mail.rs                # mail-parser 解析
-│   ├── notify.rs              # Telegram / Bark 并发推送
+│   ├── notify.rs              # Telegram / Bark 推送
 │   ├── r2.rs                  # R2 对象读写
 │   ├── jwt.rs                 # 手写 HS256（不引入 jsonwebtoken）
 │   ├── util.rs                # 时间 / ID / 截断 / 常量时间比较
@@ -223,4 +254,5 @@ MailFlare/
 - **JWT 手写**，只要 HS256，不拖入 `rsa`/`p256` 与 `getrandom` 传递依赖；`alg` 写死，免疫 `alg=none` 攻击
 - **邮件 HTML 在 `<iframe sandbox>` 里渲染**，拦截外部追踪图片，外链强制 `target="_blank"` + `rel="noopener noreferrer"`
 - **D1 行长兜底**：正文超限按 UTF-8 边界截断，避免单行超限导致整封邮件入库失败
-- **收信失败告警**：入库/存储异常会推一条 TG/Bark 消息，不静默丢信
+- **收信失败告警**：尝试通过已启用渠道提示异常；存储或通知同时不可用时依赖 Worker 日志。
+- **登录限流**：Cloudflare 注入的来源 IP 哈希后计数，5 分钟最多 5 次尝试；一个来源不会锁住所有管理员登录。

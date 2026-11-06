@@ -64,8 +64,11 @@ pub struct EmailDetail {
     pub attachments: Vec<AttachmentMeta>,
     pub is_read: bool,
     pub created_at: i64,
-    /// 验证码推送结果：`None` 未尝试，`Some("ok")` 成功，`Some("failed")` 失败。
+    /// 验证码推送结果：None 未尝试；pending 等待重试；ok 成功；failed 已停止重试。
     pub push_status: Option<String>,
+    pub raw_key: Option<String>,
+    pub storage_status: String,
+    pub deleted_at: Option<i64>,
 }
 
 /// 入库用的完整记录（写入侧用）。
@@ -79,11 +82,14 @@ pub struct NewEmail<'a> {
     pub html_body: &'a str,
     pub attachments: &'a [AttachmentMeta],
     pub created_at: i64,
+    pub raw_key: Option<&'a str>,
+    pub storage_status: &'a str,
 }
 
 /// 列表查询参数。
 pub struct ListQuery {
     pub unread_only: bool,
+    pub trash: bool,
     /// 游标：(created_at, id)
     pub cursor: Option<(i64, String)>,
     pub limit: i64,
@@ -156,6 +162,9 @@ struct DetailRow {
     created_at: Option<i64>,
     #[serde(default)]
     push_status: Option<String>,
+    raw_key: Option<String>,
+    storage_status: String,
+    deleted_at: Option<i64>,
 }
 
 /// 解析 attachments JSON；损坏时返回空数组而不是报错，保证邮件本身还能看。
@@ -187,46 +196,85 @@ fn collapse_whitespace(s: &str) -> String {
     out.trim_end().to_string()
 }
 
-/// 极简 HTML 去标签（不追求语义正确）。
-///
-/// 特点是**单遍扫描**：遇到 `<` 跳到下一个 `>`；顺带把
-/// `<style>`/`<script>` 的内容整段丢掉，避免预览里出现一堆 CSS。
-/// 最后解码常见 HTML 实体，否则预览会露出 `&nbsp;`、`&amp;` 这类源码。
+/// 列表预览压缩空白；验证码提取使用保留段落边界的 `html_to_text`。
 pub fn strip_html_preview(html: &str) -> String {
-    let mut out = String::with_capacity(html.len().min(512));
-    let bytes = html.as_bytes();
-    let mut i = 0usize;
+    collapse_whitespace(&html_to_text(html))
+}
 
+/// 提取 HTML 文本，块级标签用换行隔开，内联标签不拆分连续字符。
+/// 这不是浏览器 HTML 消毒器，只用于预览和验证码分析。
+pub fn html_to_text(html: &str) -> String {
+    let mut out = String::with_capacity(html.len().min(4096));
+    let lower = html.to_ascii_lowercase();
+    let bytes = html.as_bytes();
+    let mut i = 0;
     while i < bytes.len() {
+        if html[i..].starts_with("<!--") {
+            i = html[i + 4..]
+                .find("-->")
+                .map_or(bytes.len(), |n| i + 4 + n + 3);
+            continue;
+        }
         if bytes[i] != b'<' {
-            // 普通文本：按字符推进，保证不会切在 UTF-8 边界上。
-            let ch = html[i..].chars().next().unwrap_or(' ');
+            let ch = html[i..].chars().next().unwrap();
             out.push(ch);
             i += ch.len_utf8();
             continue;
         }
-
-        let tag_end = html[i..].find('>').map(|p| i + p).unwrap_or(bytes.len());
-        let tag = &html[i + 1..tag_end.min(bytes.len())];
-        i = (tag_end + 1).min(bytes.len());
-
-        // 跳过 style / script 的整段内容。
+        let start = i + 1;
+        let mut quote = None;
+        i = start;
+        // 属性引号内的 > 不结束标签；所有切片端点均为 ASCII 分隔符。
+        while i < bytes.len() {
+            match (bytes[i], quote) {
+                (ch, Some(q)) if ch == q => quote = None,
+                (b'\'' | b'"', None) => quote = Some(bytes[i]),
+                (b'>', None) => break,
+                _ => {}
+            }
+            i += 1;
+        }
+        let tag = lower[start..i].trim();
+        i = (i + 1).min(bytes.len());
         let name = tag
             .trim_start_matches('/')
-            .split(|c: char| c.is_whitespace() || c == '>')
+            .split(|c: char| c.is_whitespace() || c == '/')
             .next()
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if !tag.starts_with('/') && (name == "style" || name == "script") {
-            let close = if name == "style" { "</style" } else { "</script" };
-            if let Some(pos) = html[i..].find(close) {
-                i += pos;
-                i = html[i..].find('>').map(|p| i + p + 1).unwrap_or(bytes.len());
-            }
+            .unwrap_or("");
+        if !tag.starts_with('/') && matches!(name, "head" | "style" | "script" | "template") {
+            let close = format!("</{name}");
+            i = lower[i..].find(&close).map_or(bytes.len(), |n| i + n);
+            i = lower[i..].find('>').map_or(bytes.len(), |n| i + n + 1);
+            out.push('\n');
+        } else if matches!(
+            name,
+            "p" | "div"
+                | "br"
+                | "hr"
+                | "li"
+                | "ul"
+                | "ol"
+                | "table"
+                | "tr"
+                | "td"
+                | "th"
+                | "h1"
+                | "h2"
+                | "h3"
+                | "h4"
+                | "h5"
+                | "h6"
+                | "section"
+                | "article"
+                | "header"
+                | "footer"
+                | "blockquote"
+                | "pre"
+        ) {
+            out.push('\n');
         }
     }
-
-    decode_entities(&collapse_whitespace(&out))
+    decode_entities(&out)
 }
 
 /// 解码常见 HTML 实体。
@@ -242,7 +290,7 @@ fn decode_entities(text: &str) -> String {
         rest = &rest[pos..];
 
         // 实体最长十几个字符，取一小段找分号。
-        let Some(semi) = rest[..rest.len().min(12)].find(';') else {
+        let Some(semi) = rest.as_bytes().iter().take(12).position(|&b| b == b';') else {
             // 没有分号：不是实体，原样保留这个 & 继续往后扫。
             out.push('&');
             rest = &rest[1..];
@@ -296,7 +344,7 @@ fn decode_numeric_entity(entity: &str) -> Option<char> {
     char::from_u32(code).filter(|c| !c.is_control())
 }
 
-/// 插入邮件；返回 `true` 表示确实是新邮件（`false` 说明 message_id 重复被忽略）。
+/// 插入邮件；返回 false 表示主键或「Message-ID + 信封收件地址」重复。
 pub async fn insert_email(db: &D1Database, email: &NewEmail<'_>) -> AppResult<bool> {
     let attachments_json = serde_json::to_string(email.attachments)?;
 
@@ -321,8 +369,8 @@ pub async fn insert_email(db: &D1Database, email: &NewEmail<'_>) -> AppResult<bo
     let stmt = db
         .prepare(
             "INSERT OR IGNORE INTO emails \
-             (id, message_id, sender, recipient, subject, text_body, html_body, attachments, is_read, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, CAST(?9 AS INTEGER))",
+             (id, message_id, sender, recipient, subject, text_body, html_body, attachments, is_read, created_at, raw_key, storage_status) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, CAST(?9 AS INTEGER), ?10, ?11)",
         )
         .bind_refs(&[
             D1Type::Text(email.id),
@@ -337,6 +385,8 @@ pub async fn insert_email(db: &D1Database, email: &NewEmail<'_>) -> AppResult<bo
             D1Type::Text(&html_body),
             D1Type::Text(&attachments_json),
             ts(email.created_at),
+            email.raw_key.map_or(D1Type::Null, D1Type::Text),
+            D1Type::Text(email.storage_status),
         ])?;
 
     let result = stmt.run().await?;
@@ -372,6 +422,11 @@ pub async fn list_emails(
          FROM emails WHERE 1 = 1",
     );
 
+    sql.push_str(if query.trash {
+        " AND deleted_at IS NOT NULL"
+    } else {
+        " AND deleted_at IS NULL"
+    });
     if query.unread_only {
         sql.push_str(" AND is_read = 0");
     }
@@ -408,7 +463,8 @@ pub async fn list_emails(
     // 列表与未读计数合并进一次 `batch`：D1 的每条语句都是一次网络往返，
     // 合成一个 batch 能把侧边栏角标的延迟从 2 RTT 降到 1 RTT。
     let list_stmt = db.prepare(sql).bind_refs(&binds)?;
-    let count_stmt = db.prepare("SELECT COUNT(*) AS c FROM emails WHERE is_read = 0");
+    let count_stmt =
+        db.prepare("SELECT COUNT(*) AS c FROM emails WHERE is_read = 0 AND deleted_at IS NULL");
 
     let mut results = db.batch(vec![list_stmt, count_stmt]).await?;
     // 用 `match` 而不是先检查长度再 pop：即使 D1 行为异常也只会返回 500，
@@ -439,13 +495,8 @@ pub async fn list_emails(
     }
 
     let next_cursor = if has_more {
-        rows.last().map(|r| {
-            format!(
-                "{}_{}",
-                r.created_at.unwrap_or_default(),
-                r.id.as_str()
-            )
-        })
+        rows.last()
+            .map(|r| format!("{}_{}", r.created_at.unwrap_or_default(), r.id.as_str()))
     } else {
         None
     };
@@ -490,7 +541,7 @@ pub async fn get_email(db: &D1Database, id: &str) -> AppResult<Option<EmailDetai
     let stmt = db
         .prepare(
             "SELECT id, message_id, sender, recipient, subject, text_body, html_body, \
-             attachments, is_read, created_at, push_status FROM emails WHERE id = ?1",
+             attachments, is_read, created_at, push_status, raw_key, storage_status, deleted_at FROM emails WHERE id = ?1",
         )
         .bind_refs(&[D1Type::Text(id)])?;
 
@@ -507,6 +558,9 @@ pub async fn get_email(db: &D1Database, id: &str) -> AppResult<Option<EmailDetai
         is_read: r.is_read.unwrap_or(0) != 0,
         created_at: r.created_at.unwrap_or_default(),
         push_status: r.push_status,
+        raw_key: r.raw_key,
+        storage_status: r.storage_status,
+        deleted_at: r.deleted_at,
     }))
 }
 
@@ -523,10 +577,7 @@ struct AttachmentsRow {
 /// 只取附件元数据（下载与删除时校验归属用）。
 ///
 /// 返回 `None` 表示邮件不存在；`Some(vec![])` 表示存在但没有附件。
-pub async fn get_attachments(
-    db: &D1Database,
-    id: &str,
-) -> AppResult<Option<Vec<AttachmentMeta>>> {
+pub async fn get_attachments(db: &D1Database, id: &str) -> AppResult<Option<Vec<AttachmentMeta>>> {
     let stmt = db
         .prepare("SELECT attachments FROM emails WHERE id = ?1")
         .bind_refs(&[D1Type::Text(id)])?;
@@ -544,22 +595,13 @@ pub async fn set_read(db: &D1Database, id: &str, read: bool) -> AppResult<bool> 
     Ok(result.meta()?.and_then(|m| m.changes) != Some(0))
 }
 
-/// 写入推送结果：`ok` / `failed`。
-pub async fn set_push_status(db: &D1Database, id: &str, status: &str) -> AppResult<()> {
-    db.prepare("UPDATE emails SET push_status = ?1 WHERE id = ?2")
-        .bind_refs(&[D1Type::Text(status), D1Type::Text(id)])?
-        .run()
-        .await?;
-    Ok(())
-}
-
 /// 把所有未读邮件标为已读，返回受影响行数。
 ///
 /// 加 `WHERE is_read = 0` 是必要的：全表 UPDATE 会让每一行都产生写放大
 /// （D1 按行计费），而这里通常只有少量未读。
 pub async fn mark_all_read(db: &D1Database) -> AppResult<i64> {
     let result = db
-        .prepare("UPDATE emails SET is_read = 1 WHERE is_read = 0")
+        .prepare("UPDATE emails SET is_read = 1 WHERE is_read = 0 AND deleted_at IS NULL")
         .run()
         .await?;
     if !result.success() {
@@ -571,17 +613,19 @@ pub async fn mark_all_read(db: &D1Database) -> AppResult<i64> {
     Ok(result.meta()?.and_then(|m| m.changes).unwrap_or(0) as i64)
 }
 
-/// 删除 D1 记录，返回被删除邮件的附件元数据（调用方据此清理 R2）。
-pub async fn delete_email(db: &D1Database, id: &str) -> AppResult<Option<Vec<AttachmentMeta>>> {
-    let attachments = get_attachments(db, id).await?;
-    if attachments.is_none() {
-        return Ok(None);
-    }
-
-    db.prepare("DELETE FROM emails WHERE id = ?1")
-        .bind_refs(&[D1Type::Text(id)])?
+/// 回收站只改状态，原文与附件继续保留。
+pub async fn set_deleted(db: &D1Database, id: &str, deleted: bool) -> AppResult<bool> {
+    let result = db
+        .prepare("UPDATE emails SET deleted_at = ?1 WHERE id = ?2 AND storage_status != 'purging'")
+        .bind_refs(&[
+            if deleted {
+                ts(crate::util::now_ms())
+            } else {
+                D1Type::Null
+            },
+            D1Type::Text(id),
+        ])?
         .run()
         .await?;
-
-    Ok(attachments)
+    Ok(result.meta()?.and_then(|m| m.changes) != Some(0))
 }

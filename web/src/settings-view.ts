@@ -1,5 +1,5 @@
 /**
- * 右侧设置工作区：邮件列表保持不变，只切换详情列的内容。
+ * 设置工作区：在主区域中切换邮件视图与设置表单。
  */
 
 import type { SettingsPatch, SettingsView } from "./api-types.ts";
@@ -156,33 +156,24 @@ export function createSettingsController(
     ok: boolean;
   } | null): void => {
     const box = lastPushBox();
-    if (!log) {
-      box.hidden = true;
-      return;
-    }
     box.replaceChildren();
-    box.hidden = false;
-
-    // 只展示成功的结果。失败原因对普通使用没有意义（绝大多数是渠道侧
-    // 网络问题，用户也改不了），留着只会堆噪音。
-    if (!log.ok) {
-      box.hidden = true;
-      return;
-    }
+    box.hidden = !log?.ok;
+    if (!log?.ok) return;
     const when = new Date(log.at * 1000).toLocaleString("zh-CN", { hour12: false });
     box.append(resultRow("ok", `${when} 收到验证码 ${log.code}`));
   };
 
-  void (async () => {
+  const loadLastPush = async (request: number): Promise<void> => {
+    renderLastPush(null);
     try {
       const data = await api.request<{ last_push: Parameters<typeof renderLastPush>[0] }>(
         "/api/settings/last-push",
       );
-      renderLastPush(data.last_push);
+      if (request === requestVersion) renderLastPush(data.last_push);
     } catch {
       // 读不到就不显示，不打扰用户。
     }
-  })();
+  };
 
   const testButton = (): HTMLButtonElement => el<HTMLButtonElement>("#test-push");
   testButton().addEventListener("click", () => {
@@ -373,6 +364,7 @@ export function createSettingsController(
         el<HTMLElement>(".settings-content").scrollTop = 0;
         show(true);
         afterOpen?.(loaded);
+        void loadLastPush(request);
       } catch (error) {
         if (request === requestVersion) {
           errBox().textContent = error instanceof Error ? error.message : "设置加载失败";

@@ -1,4 +1,4 @@
-//! 收信处理：Email Routing -> mail-parser -> R2 附件 -> D1 -> 异步推送。
+//! 收信处理：Email Routing -> R2 原文 -> mail-parser -> R2 附件 -> D1 -> 异步推送。
 //!
 //! 内存要点：
 //! * 原始报文只读一次，`Message<'_>` 直接借用缓冲区（零拷贝）；
@@ -7,17 +7,17 @@
 //! * 超过单封上限的邮件在读取前 `set_reject`，不进入 WASM 堆；
 //! * 附件并发写 R2 用 `buffer_unordered`，推送挂 `waitUntil`。
 //!
-//! D1 存完整邮件（含正文与附件元数据），R2 只存附件字节。
+//! D1 存正文、附件元数据和恢复任务，R2 存原始邮件与附件。
 
-use worker::{console_error, console_log, Context, D1Database, Env, ForwardableEmailMessage};
+use worker::{Context, D1Database, Env, ForwardableEmailMessage, console_error, console_log};
 
 use crate::config::{self, Config, Settings};
 use crate::db::{self, NewEmail};
 use crate::error::{AppError, AppResult};
 use crate::mail;
-use crate::notify::{self, PushContext, PushEmail};
+use crate::notify;
 use crate::r2;
-use crate::util::{new_id, now_ms};
+use crate::util::now_ms;
 
 /// Email 事件入口。
 pub async fn handle(
@@ -30,25 +30,23 @@ pub async fn handle(
     let envelope_from = message.from();
     let raw_size = message.raw_size();
 
-    // 账号配置缺失时直接拒收。此时无法告警（推送配置也在 D1 里，
+    // 账号配置缺失时返回运行时错误。此时无法告警（推送配置也在 D1 里，
     // 很可能连 D1 绑定都没配好），只能写日志——运维应该盯 Worker 日志。
     if let Err(e) = Config::from_env(&env) {
         console_error!("[mailflare] 收信失败：配置缺失 · {e:?}");
-        message.set_reject("MailFlare 未完成配置，暂时无法接收邮件");
-        return Ok(());
+        return Err(worker::Error::RustError(format!(
+            "MailFlare 配置缺失: {e:?}"
+        )));
     }
 
     // D1 句柄提前取：既给正常流程用，也给失败告警用。
     // 拿不到就直接返回错误（无法告警也无法入库）。
     let db = env.d1("DB")?;
 
-    // 收信参数全部来自 D1；读取失败时退回默认值而不是拒收，
-    // 宁可多存一封邮件，也不要因为设置表读不出来而丢信。
-    let cfg = config::load_settings(&db).await.unwrap_or_else(|e| {
-        console_error!("[mailflare] 读取设置失败，使用默认值继续收信: {e:?}");
-        Settings::default()
-    });
-
+    // 配置读取失败直接返回运行时错误，不能以默认配置放开过滤或丢弃附件。
+    let cfg = config::load_settings(&db)
+        .await
+        .map_err(|e| worker::Error::RustError(format!("{e:?}")))?;
     // ---- 黑名单 / 白名单 ------------------------------------------------
     // 放在体积检查之前：垃圾邮件往往带大附件，先按地址拦掉能省下
     // 后面所有判断的成本。两者都只看信封地址，不解析报文。
@@ -68,7 +66,10 @@ pub async fn handle(
     // 超限邮件在**读取之前**就拒收，数据不会进入 WASM 堆。
     if raw_size > cfg.max_message_bytes as f64 {
         let limit_mb = cfg.max_message_bytes / 1024 / 1024;
-        let detail = format!("{:.2} MB 超过上限 {limit_mb} MB", raw_size / 1024.0 / 1024.0);
+        let detail = format!(
+            "{:.2} MB 超过上限 {limit_mb} MB",
+            raw_size / 1024.0 / 1024.0
+        );
         console_error!("[mailflare] 邮件过大被拒收：{detail}");
 
         // 超大邮件往往是「有人误发了大附件」，值得告警一次——
@@ -104,15 +105,47 @@ pub async fn handle(
                 &envelope_to,
                 raw_size,
             );
-            message.set_reject("MailFlare 读取邮件失败，请稍后重试");
-            return Ok(());
+            return Err(e);
         }
     };
 
-    // ---- 解析 + 落库 ---------------------------------------------------
+    // 同一原文向同一收件人重复投递时复用对象键；先登记恢复任务再上传原文。
+    let id = crate::s3sign::sha256_hex(&[raw.as_slice(), envelope_to.as_bytes()].concat());
+    if db::get_email(&db, &id)
+        .await
+        .map_err(|e| worker::Error::RustError(format!("{e:?}")))?
+        .is_some()
+    {
+        return Ok(());
+    }
+    if cfg.r2_configured() {
+        let claimed =
+            crate::jobs::register_inbound(&db, &id, &envelope_from, &envelope_to, received_at)
+                .await
+                .map_err(|e| worker::Error::RustError(format!("{e:?}")))?;
+        if let Err(e) = r2::put_raw(&cfg, &id, raw.clone()).await {
+            spawn_alert(
+                &ctx,
+                &env,
+                notify::InboundFailure::StorageError,
+                format!("原始邮件保存失败：{e:?}"),
+                &envelope_from,
+                &envelope_to,
+                raw_size,
+            );
+            if claimed {
+                let _ = crate::jobs::release_inbound(&db, &id).await;
+            }
+            return Err(worker::Error::RustError("原始邮件保存失败".into()));
+        }
+        if !claimed {
+            return Ok(());
+        }
+    }
     match process(
         &cfg,
         &db,
+        &id,
         raw,
         &envelope_to,
         &envelope_from,
@@ -120,54 +153,38 @@ pub async fn handle(
     )
     .await
     {
-        Ok(Some(email)) => {
-            console_log!(
-                "[mailflare] 收到邮件 {} · 发件人 {} · {} 个附件",
-                email.id,
-                email.sender,
-                email.attachments.len()
-            );
-            // 推送不阻塞收信：SMTP 侧已经可以拿到成功响应。
-            // 复用上面已读到的设置，省掉一次 D1 往返。
-            spawn_push(&env, ctx, email, cfg.clone());
-        }
-        Ok(None) => {
-            // 重复投递：静默成功，发信方无需重试。
-            // 这是**预期行为**，不该告警（SMTP 重试很常见）。
-            console_log!("[mailflare] 跳过重复投递的邮件（Message-ID 已存在）");
+        Ok(()) => {
+            // 先持久化通知任务，再异步发出；进程中断也可由定时任务续接。
+            let env = env.clone();
+            ctx.wait_until(async move {
+                if let Err(e) = crate::jobs::run_notifications(&env).await {
+                    console_error!("[mailflare] 通知任务失败: {e:?}");
+                }
+            });
         }
         Err(e) => {
-            // 区分「邮件本身有问题」与「我方后端故障」：
-            // 前者告警意义不大（垃圾邮件/畸形邮件很常见），后者必须告警。
-            let (failure, detail) = match &e {
-                AppError::BadRequest(msg) => (
-                    notify::InboundFailure::Unparsable,
-                    format!("邮件解析失败：{msg}"),
-                ),
-                other => (
-                    notify::InboundFailure::StorageError,
-                    format!("邮件入库失败：{other:?}"),
-                ),
-            };
-            console_error!("[mailflare] {detail}");
-
-            if matches!(failure, notify::InboundFailure::StorageError) {
-                spawn_alert(
-                    &ctx,
-                    &env,
-                    failure,
-                    detail,
-                    &envelope_from,
-                    &envelope_to,
-                    raw_size,
-                );
+            spawn_alert(
+                &ctx,
+                &env,
+                notify::InboundFailure::StorageError,
+                format!("邮件处理失败：{e:?}"),
+                &envelope_from,
+                &envelope_to,
+                raw_size,
+            );
+            if !cfg.r2_configured() {
+                // 没有持久化副本时向运行时报告失败，绝不主动永久拒收。
+                return Err(worker::Error::RustError(format!("邮件尚未保存：{e:?}")));
             }
-
-            // 让发信方重试，比默默吞掉更可靠。
-            message.set_reject("MailFlare 处理邮件时发生内部错误，请稍后重试");
+            console_error!("[mailflare] 原文已保存，等待恢复任务: {id}");
         }
     }
 
+    if cfg.r2_configured()
+        && let Err(e) = crate::jobs::release_inbound(&db, &id).await
+    {
+        console_error!("[mailflare] 释放恢复任务失败（租约到期后继续）: {e:?}");
+    }
     Ok(())
 }
 
@@ -199,23 +216,24 @@ fn spawn_alert(
 
 /// 解析 + 写 R2 + 写 D1 的完整流水线。
 ///
-/// `raw` 按值传入：解析只借用它，最后再整体 move 给 R2 保存原文，
-/// 全程只有 JS -> Rust 那一次不可避免的拷贝。
-async fn process(
+/// 原文已经由入口保存；这里的错误可以由持久化任务继续处理。
+pub(crate) async fn process(
     cfg: &Settings,
     db: &D1Database,
+    id: &str,
     raw: Vec<u8>,
     envelope_to: &str,
     envelope_from: &str,
     received_at: i64,
-) -> AppResult<Option<db::EmailDetail>> {
+) -> AppResult<()> {
     // 解析结果的借用只存在于这一行；`ParsedEmail` 全部字段都是拥有所有权的。
     let Some(parsed) = mail::parse(&raw, cfg.max_body_bytes as usize) else {
         return Err(AppError::BadRequest("邮件格式无法解析".into()));
     };
 
-    let id = new_id();
     let created_at = parsed.date_ms.unwrap_or(received_at);
+    let raw_key = cfg.r2_configured().then(|| r2::raw_key(id));
+    let mut incomplete = false;
 
     // ---- 1. 附件并发写 R2 ----------------------------------------------
     // 先挑出可转存的附件；超限的保留元数据但标记 stored=false，
@@ -228,7 +246,9 @@ async fn process(
 
     for (index, att) in parsed.attachments.into_iter().enumerate() {
         let mut meta = mail::attachment_meta(index, &att);
-        if att.bytes.len() > cfg.max_attachment_bytes as usize {
+        if !cfg.r2_configured() {
+            meta.stored = false;
+        } else if att.bytes.len() > cfg.max_attachment_bytes as usize {
             console_error!(
                 "[mailflare] 附件「{}」超过上限（{:.1}MB），跳过转存",
                 att.filename,
@@ -238,7 +258,7 @@ async fn process(
             meta.stored = false;
             // att 在此 drop，字节立刻归还给分配器。
         } else {
-            meta.key = r2::attachment_key(&id, index);
+            meta.key = r2::attachment_key(id, index);
             meta.stored = true;
             uploads.push((index, att));
         }
@@ -248,7 +268,7 @@ async fn process(
     if !uploads.is_empty() {
         use futures_util::StreamExt;
 
-        let email_id: &str = &id;
+        let email_id: &str = id;
         let concurrency = r2::effective_concurrency(cfg);
 
         // `buffer_unordered` 保证既不是串行等待，也不会一次开太多子请求；
@@ -267,6 +287,7 @@ async fn process(
         for (index, result) in results {
             if let Err(e) = result {
                 console_error!("[mailflare] 附件写入 R2 失败: {e:?}");
+                incomplete = true;
                 if let Some(meta) = metas.get_mut(index) {
                     meta.stored = false;
                     meta.key.clear();
@@ -295,7 +316,7 @@ async fn process(
     let inserted = db::insert_email(
         db,
         &NewEmail {
-            id: &id,
+            id,
             message_id: parsed.message_id.as_deref(),
             sender: &sender,
             recipient: &recipient,
@@ -304,104 +325,44 @@ async fn process(
             html_body: &parsed.html_body,
             attachments: &metas,
             created_at,
+            raw_key: raw_key.as_deref(),
+            storage_status: if incomplete { "pending" } else { "complete" },
         },
     )
     .await?;
 
     if !inserted {
-        // 幂等去重命中：清掉刚写进 R2 的对象，避免留下孤儿。
-        r2::delete_email_objects(cfg, &metas).await;
-        return Ok(None);
+        if db::get_email(db, id).await?.is_some() {
+            // 恢复只更新附件存储状态，不覆盖用户的已读/回收站状态。
+            db.prepare("UPDATE emails SET attachments = ?1, storage_status = ?2 WHERE id = ?3")
+                .bind_refs(&[
+                    worker::D1Type::Text(&serde_json::to_string(&metas)?),
+                    worker::D1Type::Text(if incomplete { "pending" } else { "complete" }),
+                    worker::D1Type::Text(id),
+                ])?
+                .run()
+                .await?;
+        } else {
+            // 同一收件地址的 Message-ID 重复但原文字节不同，保留既有记录。
+            // 这里只清理本次上传，不影响投给其他别名的邮件和对象。
+            for meta in &metas {
+                if meta.stored {
+                    r2::delete_object(cfg, &meta.key).await?;
+                }
+            }
+            if let Some(key) = &raw_key {
+                r2::delete_object(cfg, key).await?;
+            }
+            crate::jobs::finish_inbound(db, id).await?;
+            return Ok(());
+        }
     }
-
-    Ok(Some(db::EmailDetail {
-        id,
-        message_id: parsed.message_id,
-        sender,
-        recipient,
-        subject: parsed.subject,
-        text_body: parsed.text_body,
-        html_body: parsed.html_body,
-        attachments: metas,
-        is_read: false,
-        // 新入库的邮件还没推送，状态由推送任务回填。
-        push_status: None,
-        created_at,
-    }))
-}
-
-/// 把推送任务挂到 `waitUntil` 上。
-fn spawn_push(env: &Env, ctx: Context, email: db::EmailDetail, settings: Settings) {
-    // 提前裁好一小段预览：别让几百 KB 的正文一直活在 waitUntil 的 future 里。
-    let preview_source = if email.text_body.is_empty() {
-        email.html_body
-    } else {
-        email.text_body
-    };
-    // 推送只服务验证码：没提取到就整封跳过，不打扰用户。
-    let Some(code) = crate::otp::extract(&email.subject, &preview_source) else {
-        return;
-    };
-    let push_email = PushEmail {
-        id: email.id,
-        sender: email.sender,
-        subject: email.subject,
-        code,
-    };
-
-    let id = push_email.id.clone();
-    let code_value = push_email.code.value.clone();
-    let subject = push_email.subject.clone();
-    // 记录推送结果用；拿不到 D1 就跳过记录，不影响推送本身。
-    let log_db = env.d1("DB").ok();
-
-    // 设置已在收信入口读过，直接复用，省掉一次 D1 往返。
-    ctx.wait_until(async move {
-        // 渠道没开就不必再构造消息了。
-        if !settings.telegram_enabled && !settings.bark_enabled {
-            // 有验证码却没推送：多半是设置没读到（load_settings 失败会退回默认值，
-            // 默认渠道是关的）。这条日志能把这个隐形失败显出来。
-            console_log!("[mailflare] 提取到验证码 {code_value}（{id}），但推送渠道未启用");
-            if let Some(db) = &log_db {
-                let _ = crate::db::set_push_status(db, &id, "failed").await;
-                notify::record_push_log(
-                    db,
-                    &notify::PushLog {
-                        at: crate::util::now_secs(),
-                        subject,
-                        code: code_value,
-                        ok: false,
-                    },
-                )
-                .await;
-            }
-            return;
-        }
-
-        console_log!("[mailflare] 开始推送验证码 {code_value}（{id}）");
-        let ctx = PushContext {
-            settings: &settings,
-            email: &push_email,
-        };
-        let ok = notify::dispatch(&ctx).await;
-        // 两处落库：
-        // - emails.push_status：详情页时间后面直接显示「已推送 / 推送失败」
-        // - configs.last_push：保存最近一次结果，设置页展示成功记录
-        if let Some(db) = &log_db {
-            if let Err(e) = crate::db::set_push_status(db, &id, if ok { "ok" } else { "failed" }).await
-            {
-                console_error!("[mailflare] 写入推送状态失败: {e:?}");
-            }
-            notify::record_push_log(
-                db,
-                &notify::PushLog {
-                    at: crate::util::now_secs(),
-                    subject,
-                    code: code_value,
-                    ok,
-                },
-            )
-            .await;
-        }
-    });
+    let email = db::get_email(db, id)
+        .await?
+        .ok_or_else(|| AppError::Internal("入库后邮件不存在".into()))?;
+    crate::jobs::enqueue_notifications(db, cfg, &email, received_at).await?;
+    if !incomplete {
+        crate::jobs::finish_inbound(db, id).await?;
+    }
+    Ok(())
 }
