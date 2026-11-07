@@ -16,7 +16,7 @@ const mf = new Miniflare(convertV4MiniflareOptions({
   modules: [{type:'ESModule',path:`${root}/build/index.js`},{type:'CompiledWasm',path:`${root}/build/index_bg.wasm`}],
   compatibilityDate: '2025-01-01', compatibilityFlags: ['global_fetch_strictly_public'],
   bindings: { ADMIN_USERNAME:'local',ADMIN_PASSWORD:'local-password',JWT_SECRET:secret },
-  d1Databases: ['DB','LEGACY'], unsafeTriggerHandlers: true,
+  d1Databases: ['DB'], unsafeTriggerHandlers: true,
   outboundService: async request => {
     const url = new URL(request.url);
     const call = { method: request.method, url: request.url };
@@ -85,30 +85,24 @@ try {
   const emailId = async subject => (await db.prepare('SELECT id FROM emails WHERE subject = ?1').bind(subject).first()).id;
   const forceDue = async table => sql(`UPDATE ${table} SET available_at = 0, lease_until = 0`);
 
-  // 已发布的 0001 升级到最终 0002，保留已有邮件并加入全部新结构。
-  const legacy = await mf.getD1Database('LEGACY');
-  const executeFile = async (database,path) => database.exec((await readFile(path,'utf8')).replace(/--[^\n]*/g,'').replace(/\s+/g,' '));
-  await executeFile(legacy,'migrations/0001_init.sql');
-  await legacy.exec("INSERT INTO emails (id,subject) VALUES ('legacy','keep me');");
-  await legacy.prepare('INSERT INTO emails (id,message_id,recipient,subject) VALUES (?1,?2,?3,?4)')
-    .bind('before-upgrade','shared@example.test','a@example.test','keep delivery').run();
-  const oldColumns = 'id,message_id,sender,recipient,subject,text_body,html_body,attachments,is_read,created_at';
-  const beforeUpgrade = (await legacy.prepare(`SELECT ${oldColumns} FROM emails ORDER BY id`).all()).results;
-  await executeFile(legacy,'migrations/0002_reliability.sql');
-  assert.deepEqual((await legacy.prepare(`SELECT ${oldColumns} FROM emails ORDER BY id`).all()).results,beforeUpgrade);
-  assert.deepEqual(await legacy.prepare("SELECT push_status,raw_key,storage_status,deleted_at FROM emails WHERE id='legacy'").first(),
-    { push_status:null, raw_key:null, storage_status:'complete', deleted_at:null });
-  const schema = async database => (await database.prepare("SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY type,name").all()).results;
-  assert.deepEqual(await schema(legacy),await schema(db),'新库和已有 0001 数据库升级后结构一致');
-  const legacyInsert = (id,messageId,recipient) => legacy.prepare('INSERT OR IGNORE INTO emails (id,message_id,recipient) VALUES (?1,?2,?3)').bind(id,messageId,recipient).run();
-  assert.equal((await legacyInsert('second-alias','shared@example.test','b@example.test')).meta.changes,1);
-  assert.equal((await legacyInsert('duplicate-alias','shared@example.test','a@example.test')).meta.changes,0);
+  // 旧邮件的列表验证码保持 null，详情仍可实时提取；无需批量回填。
+  await sql("INSERT INTO emails (id,subject,text_body,push_status) VALUES ('legacy','Verification code: 0042','keep body','ok')");
+  assert.equal((await data('/api/emails?q=0042')).items[0].otp_code, null);
+  assert.equal((await data('/api/emails/legacy')).otp_code, '0042');
+  assert.equal((await db.prepare("SELECT otp_code FROM emails WHERE id='legacy'").first()).otp_code, null);
+  await sql("DELETE FROM emails WHERE id='legacy'");
+  console.log('通过：全新建库、历史邮件无需回填、列表可空与详情实时提取');
+
+  const insert = (id,messageId,recipient) => db.prepare('INSERT OR IGNORE INTO emails (id,message_id,recipient) VALUES (?1,?2,?3)').bind(id,messageId,recipient).run();
+  assert.equal((await insert('dedup-a','shared@example.test','a@example.test')).meta.changes,1);
+  assert.equal((await insert('dedup-b','shared@example.test','b@example.test')).meta.changes,1);
+  assert.equal((await insert('dedup-repeat','shared@example.test','a@example.test')).meta.changes,0);
   for (const [prefix,messageId] of [['missing',null],['empty','']]) {
-    assert.equal((await legacyInsert(`${prefix}-1`,messageId,'a@example.test')).meta.changes,1);
-    assert.equal((await legacyInsert(`${prefix}-2`,messageId,'a@example.test')).meta.changes,1);
+    assert.equal((await insert(`dedup-${prefix}-1`,messageId,'a@example.test')).meta.changes,1);
+    assert.equal((await insert(`dedup-${prefix}-2`,messageId,'a@example.test')).meta.changes,1);
   }
-  console.log('通过：全新建库、0001 升级到 0002、历史邮件保留及新字段默认值');
-  console.log('通过：旧库去重索引升级保留数据、多收件地址隔离、缺失 Message-ID 不误判');
+  await sql("DELETE FROM emails WHERE id LIKE 'dedup-%'");
+  console.log('通过：新库按收件地址去重、缺失 Message-ID 不误判');
 
   // 同源并发失败必须原子限流；其他来源仍可登录。
   const login = (ip,password='bad') => worker.fetch('https://mailflare.test/api/auth/login', {method:'POST',headers:{'content-type':'application/json','cf-connecting-ip':ip},body:JSON.stringify({username:'local',password})});
@@ -268,7 +262,7 @@ try {
   assert.equal((await aliasRows()).length,2);
   console.log('通过：同信多别名并发投递、同地址重投去重、附件恢复与删除互不影响');
 
-  // 走真实 MIME -> D1 -> 详情/通知两条路径，外发仍完全由本地 mock 接管。
+  // 走真实 MIME -> D1 -> 列表/详情/通知三条路径，外发仍完全由本地 mock 接管。
   for (const [name, subject, plain, html, expected] of [
     ['otp-four', 'Your verification code is 0042', 'Login requested', null, '0042'],
     ['otp-html', 'Sign in', null, '<p>Verification code</p><div>482913</div><div>10 minutes</div>', '482913'],
@@ -288,9 +282,12 @@ try {
     const before = calls.length;
     await deliver(raw);
     await cron();
-    const row = await db.prepare('SELECT id FROM emails WHERE message_id=?1').bind(`${name}@example.test`).first();
+    const row = await db.prepare('SELECT id,otp_code FROM emails WHERE message_id=?1').bind(`${name}@example.test`).first();
     const detail = await data(`/api/emails/${row.id}`);
+    assert.equal(row.otp_code,expected,`${name}: 入库提取`);
     assert.equal(detail.otp_code,expected,name);
+    const list = await data(`/api/emails?q=${encodeURIComponent(subject)}`);
+    assert.equal(list.items.find(item=>item.id===row.id)?.otp_code,expected,`${name}: 列表与详情一致`);
     const jobs = (await db.prepare('SELECT status FROM notification_jobs WHERE email_id=?1').bind(row.id).all()).results;
     const sent = calls.slice(before).filter(call=>call.payload);
     if (expected !== null) {
@@ -303,7 +300,7 @@ try {
       assert.equal(sent.length,0,name);
     }
   }
-  console.log('通过：4 位码、HTML 数字边界、纯文本到 HTML 回退、中文实体、详情与通知一致、邮编/优惠码/歧义不推送');
+  console.log('通过：4 位码、HTML 数字边界、纯文本到 HTML 回退、中文实体、列表、详情与通知一致、邮编/优惠码/歧义不推送');
 
   // 广告邮件没有验证码，但旧版仍会扫描整段正文，在 & 后的中文上越界。
   // 将触发字符放在摘要范围之外，复现“列表可见，详情打不开”的内容形态。
@@ -315,7 +312,7 @@ try {
     '--newsletter','Content-Type: text/html; charset=utf-8','',newsletterHtml,'--newsletter--',''].join('\r\n');
   await deliver(newsletterRaw);
   const newsletterId = await emailId('Product newsletter');
-  assert((await data('/api/emails?q=Product%20newsletter')).items.some(email=>email.id===newsletterId && email.preview.includes('Product updates')));
+  assert((await data('/api/emails?q=Product%20newsletter')).items.some(email=>email.id===newsletterId && email.otp_code===null && email.preview.includes('Product updates')));
   const newsletter = await data(`/api/emails/${newsletterId}`);
   assert.equal(newsletter.text_body, newsletterText);
   assert.equal(newsletter.html_body, newsletterHtml);

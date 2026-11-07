@@ -1,17 +1,17 @@
 #!/usr/bin/env bun
 /**
- * 部署脚本：建库 → 迁移 → 发布。
+ * 部署脚本：建库 → 初始化或检查结构 → 发布。
  *
  * `bun run deploy` 会执行本脚本（Cloudflare 控制台的 Deploy command 也用它）。
  *
  * 三步都能重复执行：
  * 1. D1 不存在就创建（已存在则跳过）
- * 2. 应用 `migrations/` 下未执行的 SQL（D1 自己记录执行过的文件名）
+ * 2. 新库用 0001 初始化；已有库只检查结构（升级 SQL 手动执行）
  * 3. `wrangler deploy`
  */
 
 import { spawnSync } from "node:child_process";
-import { applyMigrations } from "./migrations.ts";
+import { prepareDatabase } from "./migrations.ts";
 
 /** D1 数据库名，必须与 wrangler.toml 的 database_name 一致。 */
 const DATABASE = "mailflare";
@@ -63,8 +63,8 @@ function ensureDatabase(): void {
 async function main(): Promise<void> {
   ensureDatabase();
 
-  log("应用数据库迁移");
-  await applyMigrations();
+  log("初始化或检查数据库结构");
+  await prepareDatabase();
 
   log("发布 Worker");
   if (!run(["deploy"]).ok) {

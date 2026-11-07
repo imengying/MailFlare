@@ -7,16 +7,17 @@
 
 import type { AuthConfig, EmailDetail, LoginResult, SessionResult } from "./api-types.ts";
 import { ListLoader } from "./list-loader.ts";
-import { createApi } from "./api-client.ts";
+import { ApiError, createApi } from "./api-client.ts";
+import { MailNavigation, type MailRoute } from "./navigation.ts";
 import { renderDetail, renderDetailBody, renderDetailError, renderDetailLoading } from "./detail-view.ts";
 import { mountIcons } from "./icons.ts";
 import { el, isMobile, prefersDark } from "./dom.ts";
 import { renderList } from "./list-view.ts";
 import { createSettingsController } from "./settings-view.ts";
-import { applyLoginBackground, applySiteIdentity } from "./site-theme.ts";
+import { applyLoginBackground, applySiteIdentity, setUnreadTitle } from "./site-theme.ts";
 import { createState, type Filter } from "./state.ts";
 import { mountTurnstile, noopWidget, type TurnstileWidget } from "./turnstile.ts";
-import { confirmDialog, renderDetailEmpty, toast } from "./ui.ts";
+import { confirmDialog, dismissToast, renderDetailEmpty, toast } from "./ui.ts";
 
 const state = createState();
 const api = createApi(() => showLogin());
@@ -27,6 +28,13 @@ let searchTimer: ReturnType<typeof setTimeout> | null = null;
 let detailRequest = 0;
 let listRequest = 0;
 const listLoader = new ListLoader();
+const mailMutations = new Set<string>();
+let routeRequest = 0;
+const navigation = new MailNavigation(
+  async () => !settings.isOpen() || await settings.close(),
+  applyMailRoute,
+  error => toast(errorMessage(error)),
+);
 function invalidateList(): void {
   listRequest += 1;
   listLoader.invalidate();
@@ -65,9 +73,34 @@ function setSidebarOpen(open: boolean): void {
   }
 }
 
-function closeDetail(): void {
+function closeDetail(updateHistory = true): void {
+  detailRequest += 1;
+  state.selectedId = null;
+  state.detail = null;
   el<HTMLElement>("#app-view").classList.remove("showing");
-  if (isMobile()) el<HTMLElement>("#detail-pane").scrollTop = 0;
+  el<HTMLElement>("#detail-pane").scrollTop = 0;
+  renderDetailEmpty();
+  renderList(state, listHandlers);
+  if (updateHistory) navigation.replace({ filter: state.filter, id: null, search: state.search });
+}
+
+async function applyMailRoute(route: MailRoute): Promise<void> {
+  if (!api.getToken()) return;
+  const request = ++routeRequest;
+  state.filter = route.filter;
+  state.search = route.search;
+  if (searchTimer !== null) clearTimeout(searchTimer);
+  searchTimer = null;
+  el<HTMLInputElement>("#search").value = route.search;
+  el<HTMLElement>("#list-title").textContent = listTitle();
+  syncMailNavigation();
+  setSidebarOpen(false);
+  closeDetail(false);
+  try { await loadList({ reset: true }); }
+  catch (error) { if (request === routeRequest) toast(errorMessage(error)); }
+  if (!api.getToken() || request !== routeRequest || !navigation.matches(route)) return;
+  if (route.id) await openEmail(route.id, false, false);
+  else el<HTMLElement>("#list-pane").scrollTop = navigation.scroll;
 }
 
 function syncMailNavigation(): void {
@@ -110,6 +143,8 @@ function setLoginBusy(busy: boolean): void {
 }
 
 function showLogin(): void {
+  routeRequest += 1;
+  dismissToast();
   stopPolling();
   if (searchTimer !== null) clearTimeout(searchTimer);
   searchTimer = null;
@@ -123,17 +158,15 @@ function showLogin(): void {
   state.detail = null;
   state.selectedId = null;
   state.items = [];
+  state.unread = 0;
+  setUnreadTitle(0);
 }
 
 async function enterApp(): Promise<void> {
   el<HTMLElement>("#login-view").hidden = true;
   el<HTMLElement>("#app-view").hidden = false;
   setSidebarOpen(false);
-  try {
-    await loadList({ reset: true });
-  } catch (error) {
-    toast(errorMessage(error));
-  }
+  await applyMailRoute(navigation.route);
   startPolling();
   void refreshAppearance();
 }
@@ -193,13 +226,24 @@ const listHandlers = {
 // 详情
 // ===========================================================================
 
-async function openEmail(id: string): Promise<void> {
+function focusSelectedMail(): void {
+  const row = [...document.querySelectorAll<HTMLButtonElement>(".mail-item")]
+    .find(node => node.dataset["mailId"] === state.selectedId);
+  row?.focus({ preventScroll: true });
+  row?.scrollIntoView({ block: "nearest" });
+}
+
+async function openEmail(id: string, focusList = false, updateHistory = true): Promise<void> {
   if (settings.isOpen() && !(await settings.close())) return;
+  if (updateHistory) navigation.select({ filter: state.filter, id, search: state.search });
   const request = ++detailRequest;
+  if (state.selectedId !== id) el<HTMLElement>("#detail-pane").scrollTop = 0;
   state.selectedId = id;
+  state.detail = null;
   state.allowRemoteImages = false;
   el<HTMLElement>("#app-view").classList.add("showing");
   renderList(state, listHandlers);
+  if (focusList && !isMobile()) focusSelectedMail();
   renderDetailLoading();
 
   try {
@@ -216,14 +260,17 @@ async function openEmail(id: string): Promise<void> {
       state.unread = Math.max(0, state.unread - 1);
       renderList(state, listHandlers);
     }
+    if (focusList && !isMobile()) focusSelectedMail();
   } catch (error) {
     if (request !== detailRequest) return;
     toast(errorMessage(error));
-    renderDetailError(errorMessage(error));
+    if (error instanceof ApiError && error.status === 404) closeDetail();
+    else renderDetailError(errorMessage(error));
   }
 }
 
 const detailHandlers = {
+  onBack(): void { navigation.back(); },
   onAllowImages(): void {
     state.allowRemoteImages = true;
     renderDetailBody(state, detailHandlers);
@@ -261,46 +308,55 @@ async function markUnread(id: string): Promise<void> {
 
 async function deleteEmail(id: string): Promise<void> {
   const detail = state.detail;
-  if (!detail || detail.id !== id) return;
+  if (!detail || detail.id !== id || mailMutations.has(id) || (detail.deleted_at !== null && detail.storage_status === "pending")) return;
+  mailMutations.add(id);
+  const request = detailRequest;
 
-  const purge = detail.deleted_at !== null;
-  if (purge) {
-    const confirmed = await confirmDialog("彻底删除这封邮件？", `「${detail.subject || "无主题"}」的正文、原文与附件将永久删除，无法恢复。`, "彻底删除");
-    if (!confirmed || state.detail?.id !== id) return;
-  }
-
-  const index = state.items.findIndex((item) => item.id === id);
   try {
-    await api.request(`/api/emails/${encodeURIComponent(id)}${purge ? "/purge" : ""}`, { method: "DELETE" });
-    invalidateList();
-    detailRequest += 1;
-    state.items = state.items.filter((it) => it.id !== id);
-    state.detail = null;
-    state.selectedId = null;
-    renderList(state, listHandlers);
-    const next = state.items[Math.min(Math.max(index, 0), state.items.length - 1)];
-    if (!isMobile() && next) {
-      await openEmail(next.id);
-    } else {
-      closeDetail();
-      renderDetailEmpty();
+    const purge = detail.deleted_at !== null;
+    if (purge) {
+      const confirmed = await confirmDialog("彻底删除这封邮件？", `「${detail.subject || "无主题"}」的正文、原文与附件将永久删除，无法恢复。`, "彻底删除");
+      if (!confirmed || state.detail?.id !== id || request !== detailRequest) return;
     }
-    toast(purge ? "已彻底删除" : "已移入回收站");
+
+    const index = state.items.findIndex((item) => item.id === id);
+    await api.request(`/api/emails/${encodeURIComponent(id)}${purge ? "/purge" : ""}`, { method: "DELETE" });
+    if (!api.getToken()) return;
+    invalidateList();
+    if (request === detailRequest) {
+      detailRequest += 1;
+      state.items = state.items.filter((it) => it.id !== id);
+      state.detail = null;
+      state.selectedId = null;
+      renderList(state, listHandlers);
+      const next = state.items[Math.min(Math.max(index, 0), state.items.length - 1)];
+      if (!isMobile() && next) {
+        await openEmail(next.id, true);
+      } else {
+        closeDetail();
+      }
+    }
+    toast(purge ? "已彻底删除" : "已移入回收站", 2400,
+      purge ? undefined : { label: "撤销", onClick: () => restoreEmail(id, true) });
     await loadList({ reset: true, silent: true });
   } catch (error) {
     toast(errorMessage(error));
-  }
+  } finally { mailMutations.delete(id); }
 }
 
-async function restoreEmail(id: string): Promise<void> {
+async function restoreEmail(id: string, reopen = false): Promise<void> {
+  const request = detailRequest;
   try {
     await api.request(`/api/emails/${encodeURIComponent(id)}/restore`, { method: "POST" });
-    detailRequest += 1;
-    state.detail = null;
-    state.selectedId = null;
-    renderDetailEmpty();
-    closeDetail();
+    if (!api.getToken()) return;
+    const sameView = request === detailRequest && !settings.isOpen();
+    if (sameView && !reopen) {
+      closeDetail();
+    }
     await loadList({ reset: true, silent: true });
+    if (reopen && sameView && request === detailRequest && !settings.isOpen() && !isMobile() && state.items.some(item => item.id === id)) {
+      await openEmail(id);
+    }
     toast("已恢复到收件箱");
   } catch (error) { toast(errorMessage(error)); }
 }
@@ -479,10 +535,6 @@ async function changeFilter(button: HTMLElement): Promise<void> {
   el<HTMLElement>("#list-title").textContent = listTitle();
   syncMailNavigation();
   setSidebarOpen(false);
-  detailRequest += 1;
-  state.selectedId = null;
-  state.detail = null;
-  renderDetailEmpty();
   closeDetail();
   await loadList({ reset: true, silent: true });
 }
@@ -528,6 +580,7 @@ function bindEvents(): void {
         // 无状态 JWT，服务端无需处理，失败也继续登出。
       }
       api.setToken("");
+      navigation.replace({ filter: "all", id: null, search: "" });
       showLogin();
     })();
   });
@@ -566,6 +619,7 @@ function bindEvents(): void {
     if (searchTimer !== null) clearTimeout(searchTimer);
     invalidateList();
     state.search = value;
+    navigation.replace({ filter: state.filter, id: state.selectedId, search: value });
     // 防抖：连续输入时不要每敲一个字就重排整个列表。
     searchTimer = setTimeout(() => {
       searchTimer = null;
@@ -581,7 +635,24 @@ function bindEvents(): void {
   window.matchMedia("(max-width: 860px)").addEventListener("change", () => setSidebarOpen(false));
 
   document.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape") return;
+    const target = event.target;
+    if (event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || document.querySelector("dialog[open]")) return;
+    if (event.key !== "Escape") {
+      if (!api.getToken() || isMobile() || settings.isOpen() || el<HTMLElement>("#sidebar").classList.contains("open") || state.loadingList || state.switching || state.loadingMore) return;
+      if (target instanceof Element && target.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return;
+      const direction = event.key === "ArrowDown" || event.key === "j" ? 1 : event.key === "ArrowUp" || event.key === "k" ? -1 : 0;
+      if (direction && state.items.length > 0) {
+        event.preventDefault();
+        const index = state.items.findIndex(item => item.id === state.selectedId);
+        const next = index < 0 ? (direction > 0 ? 0 : state.items.length - 1) : Math.max(0, Math.min(state.items.length - 1, index + direction));
+        const id = state.items[next]!.id;
+        if (id !== state.selectedId) void openEmail(id, true);
+      } else if (event.key === "Delete" && state.selectedId && state.detail?.id === state.selectedId && !event.repeat) {
+        event.preventDefault();
+        void deleteEmail(state.selectedId);
+      }
+      return;
+    }
     if (settings.isOpen()) {
       void settings.close();
       return;
@@ -590,7 +661,7 @@ function bindEvents(): void {
       setSidebarOpen(false);
       return;
     }
-    closeDetail();
+    navigation.back();
   });
 
   // 从后台切回来时立刻刷新，而不是等下一个 60 秒周期。

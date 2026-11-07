@@ -45,6 +45,8 @@ export interface EmailSummary {
   readonly subject: string;
   /** SQL 侧已截取+去标签的正文预览。 */
   readonly preview: string;
+  /** 入库时提取的验证码；没有或为升级前的邮件时为 null。 */
+  readonly otp_code: string | null;
   readonly is_read: boolean;
   /** 毫秒 Unix 时间戳。 */
   readonly created_at: number;

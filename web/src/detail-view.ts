@@ -6,14 +6,15 @@
  */
 
 import type { EmailDetail } from "./api-types.ts";
-import { create, formatSize, isMobile } from "./dom.ts";
+import { create, formatSize } from "./dom.ts";
 import { icon } from "./icons.ts";
 import { buildSrcdoc, hasRemoteImages } from "./mail-render.ts";
 import type { AppState } from "./state.ts";
 import { senderInitial, senderTone } from "./sender.ts";
-import { emptyState, toast } from "./ui.ts";
+import { copyText, emptyState } from "./ui.ts";
 
 export interface DetailHandlers {
+  onBack(): void;
   /** 用户点了「显示图片」。 */
   onAllowImages(): void;
   /** 标为未读。 */
@@ -56,6 +57,7 @@ export function renderDetail(state: AppState, handlers: DetailHandlers): void {
 
   const head = create("div", { className: "detail-head" });
   head.append(create("h1", { className: "detail-subject", textContent: detail.subject || "(无主题)" }));
+  if (detail.otp_code !== null) head.append(buildOtp(detail.otp_code));
 
   const meta = create("dl", { className: "meta-line" });
   const addMeta = (label: string, value: string): HTMLElement | undefined => {
@@ -72,10 +74,7 @@ export function renderDetail(state: AppState, handlers: DetailHandlers): void {
     const copy = create("button", { className: "btn ghost icon-btn sm copy-address", type: "button", title: "复制收件地址", ariaLabel: "复制收件地址" });
     copy.append(icon("copy"));
     copy.addEventListener("click", () => {
-      void navigator.clipboard.writeText(detail.recipient).then(
-        () => toast("收件地址已复制"),
-        () => toast("复制失败，请选择地址手动复制"),
-      );
+      void copyText(detail.recipient, "收件地址已复制");
     });
     recipient.append(copy);
   }
@@ -105,13 +104,38 @@ export function renderDetail(state: AppState, handlers: DetailHandlers): void {
   info.append(meta, timeRow);
   head.append(metaWrap);
   if (detail.storage_status !== "complete") {
-    head.append(create("p", { textContent: detail.storage_status === "pending"
-      ? "部分附件暂时未保存，系统正在重试。你可以下载原始邮件查看完整内容。"
-      : "彻底删除尚未完成，请再次点击彻底删除以继续清理。" }));
+    const notice = create("div", { className: "notice", id: "storage-notice", role: "status" });
+    let message = "彻底删除尚未完成，期间无法恢复；请再次点击「彻底删除」继续清理。";
+    if (detail.storage_status === "pending") {
+      message = "部分附件暂未保存，系统正在重试。";
+      if (detail.original_url) message += "可先通过「导出原文」查看完整内容。";
+      if (detail.deleted_at !== null) message += "等待附件恢复完成后，才能彻底删除。";
+    }
+    notice.append(icon("alert"), create("span", { textContent: message }));
+    head.append(notice);
   }
 
   pane.replaceChildren(buildActions(detail, handlers), head);
   renderDetailBody(state, handlers);
+}
+
+function buildOtp(code: string): HTMLElement {
+  const bar = create("div", { className: "otp-bar", ariaLabel: "邮件验证码" });
+  const value = create("span", { className: "otp-code", textContent: code });
+  const copy = create("button", { className: "btn sm", type: "button", ariaLabel: "复制验证码" });
+  const label = create("span", { textContent: "复制" });
+  copy.append(icon("copy"), label);
+  let feedback: ReturnType<typeof setTimeout> | undefined;
+  copy.addEventListener("click", () => {
+    void copyText(code, "验证码已复制").then(ok => {
+      if (!ok || !copy.isConnected) return;
+      clearTimeout(feedback);
+      copy.replaceChildren(icon("check"), label);
+      feedback = setTimeout(() => copy.replaceChildren(icon("copy"), label), 1600);
+    });
+  });
+  bar.append(create("span", { className: "otp-label", textContent: "验证码" }), value, copy);
+  return bar;
 }
 
 /** 操作按钮组。 */
@@ -121,31 +145,35 @@ function buildActions(detail: EmailDetail, handlers: DetailHandlers): HTMLElemen
 
   const back = create("button", { className: "btn sm ghost detail-back", type: "button", textContent: "返回" });
   back.prepend(icon("back"));
-  back.addEventListener("click", leaveDetail);
+  back.addEventListener("click", handlers.onBack);
   toolbar.append(back, actions);
 
   const deleteLabel = detail.deleted_at !== null ? "彻底删除" : "删除";
-  const deleteBtn = create("button", { className: "btn sm ghost danger", type: "button", textContent: deleteLabel, title: deleteLabel });
-  deleteBtn.prepend(icon("trash"));
+  const deleteBtn = create("button", { className: `btn sm ghost danger${detail.deleted_at === null ? " compact-action" : ""}`, type: "button", ariaLabel: deleteLabel, title: deleteLabel });
+  deleteBtn.append(icon("trash"), create("span", { className: "action-label", textContent: deleteLabel }));
   deleteBtn.addEventListener("click", () => handlers.onDelete(detail.id));
   if (detail.deleted_at !== null) {
     const restore = create("button", { className: "btn sm ghost", type: "button", textContent: "恢复" });
+    restore.prepend(icon("restore"));
     restore.disabled = detail.storage_status === "purging";
+    if (restore.disabled) restore.setAttribute("aria-describedby", "storage-notice");
+    deleteBtn.disabled = detail.storage_status === "pending";
+    if (deleteBtn.disabled) deleteBtn.setAttribute("aria-describedby", "storage-notice");
     restore.addEventListener("click", () => handlers.onRestore(detail.id));
     actions.append(restore);
   } else {
-    const unreadBtn = create("button", { className: "btn sm ghost", type: "button", textContent: "标为未读", title: "标为未读" });
-    unreadBtn.prepend(icon("mail"));
+    const unreadBtn = create("button", { className: "btn sm ghost compact-action", type: "button", ariaLabel: "标为未读", title: "标为未读" });
+    unreadBtn.append(icon("mail"), create("span", { className: "action-label", textContent: "标为未读" }));
     unreadBtn.addEventListener("click", () => handlers.onMarkUnread(detail.id));
     actions.append(unreadBtn);
   }
   if (detail.original_url) {
-    const download = create("a", { className: "btn sm ghost", textContent: "导出原文", href: detail.original_url });
-    download.prepend(icon("download"));
+    const download = create("a", { className: "btn sm ghost compact-action", ariaLabel: "导出原文", title: "导出原文", href: detail.original_url });
+    download.append(icon("download"), create("span", { className: "action-label", textContent: "导出原文" }));
     download.setAttribute("download", `${detail.id}.eml`);
     actions.append(download);
   }
-  actions.append(deleteBtn);
+  actions.append(create("span", { className: "action-divider", ariaHidden: "true" }), deleteBtn);
   return toolbar;
 }
 
@@ -175,7 +203,9 @@ function buildBody(state: AppState, handlers: DetailHandlers): HTMLElement {
     if (!state.allowRemoteImages && hasRemoteImages(detail.html_body)) {
       box.append(buildImageBar(handlers));
     }
-    box.append(buildIframe(detail.html_body, state.allowRemoteImages));
+    const frame = create("div", { className: "mail-frame" });
+    frame.append(buildIframe(detail.html_body, state.allowRemoteImages));
+    box.append(frame);
     return box;
   }
 
@@ -292,7 +322,7 @@ function buildAttachments(detail: EmailDetail): HTMLElement[] {
     const info = create("div", { className: "att-info" });
     info.append(
       create("span", { className: "name", textContent: name, title: name }),
-      create("span", { className: "size", textContent: `${formatSize(file.size)}${url ? "" : " · 未保存"}` }),
+      create("span", { className: "size", textContent: formatSize(file.size) }),
     );
     node.append(icon("paperclip"));
     if (url) {
@@ -301,16 +331,16 @@ function buildAttachments(detail: EmailDetail): HTMLElement[] {
       link.append(info);
       node.append(link);
     } else {
+      const explanation = detail.original_url && detail.storage_status !== "purging"
+        ? "暂时无法单独下载，可通过「导出原文」查看附件。"
+        : "暂无可下载文件。";
+      info.append(
+        create("span", { className: "attachment-status", textContent: "未保存", title: explanation }),
+        create("span", { className: "attachment-help", textContent: explanation }),
+      );
       node.append(info);
     }
     list.append(node);
   }
   return [section];
-}
-
-/** 移动端返回列表。 */
-function leaveDetail(): void {
-  if (isMobile()) {
-    document.querySelector("#app-view")?.classList.remove("showing");
-  }
 }

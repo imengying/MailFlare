@@ -1,20 +1,22 @@
-/** 用真实 Wrangler + 本地 D1 验证部署迁移，不连接线上数据库。 */
+/** 用真实 Wrangler + 本地 D1 验证初始化、手动加列与只读检查，不连接线上数据库。 */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { applyMigrations } from "./migrations.ts";
+import { prepareDatabase } from "./migrations.ts";
 
-const root = await mkdtemp(join(tmpdir(), "mailflare-migration-test-"));
-const original = await readFile("migrations/0002_reliability.sql", "utf8");
+const root = await mkdtemp(join(tmpdir(), "mailflare-schema-test-"));
+const initial = await readFile("migrations/0001_init.sql", "utf8");
+const manual = await readFile("scripts/sql/add-otp-code.sql", "utf8");
+const previous = initial.replace(/,\n  otp_code\s+TEXT\n/, "\n");
+assert.notEqual(previous, initial, "旧库 fixture 不应包含 otp_code");
 try {
-  let expectedSchema: unknown;
-  for (const scenario of ["fresh", "old-0001", "historical-push", "manual-push"] as const) {
+  for (const scenario of ["fresh", "manual-upgrade", "incomplete", "wrong-type"] as const) {
     const configPath = join(root, `${scenario}.toml`);
     const persistTo = join(root, scenario);
-    await writeFile(configPath, `name = "migration-test"\n[[d1_databases]]\nbinding = "DB"\ndatabase_name = "mailflare"\ndatabase_id = "00000000-0000-0000-0000-000000000001"\nmigrations_dir = ${JSON.stringify(resolve("migrations"))}\n`);
+    await writeFile(configPath, `name = "schema-test"\n[[d1_databases]]\nbinding = "DB"\ndatabase_name = "mailflare"\ndatabase_id = "00000000-0000-0000-0000-000000000001"\nmigrations_dir = ${JSON.stringify(resolve("migrations"))}\n`);
     const query = (sql: string): Array<Record<string, unknown>> => {
       const sqlPath = join(root, "query.sql");
       writeFileSync(sqlPath, sql);
@@ -24,32 +26,45 @@ try {
       assert(results.every(result => result.success));
       return results.at(-1)!.results;
     };
-    if (scenario !== "fresh") {
-      query(await readFile("migrations/0001_init.sql", "utf8"));
-      query("CREATE TABLE d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL); INSERT INTO d1_migrations (name) VALUES ('0001_init.sql'); INSERT INTO emails (id, subject, text_body, attachments) VALUES ('kept', 'existing mail', 'keep body', '[]');");
-      if (scenario !== "old-0001") {
-        query("ALTER TABLE emails ADD COLUMN push_status TEXT; UPDATE emails SET push_status='ok' WHERE id='kept';");
-        if (scenario === "historical-push") query("INSERT INTO d1_migrations (name) VALUES ('0002_push_status.sql');");
+    const options = { configPath, persistTo, local: true };
+    if (scenario === "fresh") {
+      await prepareDatabase(options);
+      assert(query("PRAGMA table_info(emails)").some(column => column["name"] === "otp_code"));
+      query("INSERT INTO emails (id, subject, otp_code) VALUES ('kept', 'Verification code: 0042', '0042');");
+    } else {
+      query(previous);
+      query("CREATE TABLE d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL); INSERT INTO d1_migrations (name) VALUES ('0001_init.sql'), ('0002_push_status.sql'), ('0002_reliability.sql'); INSERT INTO emails (id, subject, text_body, push_status) VALUES ('kept', 'Verification code: 0042', 'keep body', 'ok');");
+      if (scenario === "manual-upgrade") {
+        const before = query("SELECT * FROM emails");
+        const ledger = query("SELECT * FROM d1_migrations ORDER BY id");
+        await assert.rejects(prepareDatabase(options), /scripts\/sql\/add-otp-code.sql/);
+        assert.deepEqual(query("SELECT * FROM emails"), before, "缺列时不能修改历史邮件");
+        assert.deepEqual(query("SELECT * FROM d1_migrations ORDER BY id"), ledger, "检查不能伪造迁移记录");
+        query(manual);
+        assert.deepEqual(query("SELECT * FROM emails"), before.map(row => ({ ...row, otp_code: null })), "手动加列仅增加可空字段");
+      } else if (scenario === "incomplete") {
+        query("DROP TABLE inbound_jobs;");
+        await assert.rejects(prepareDatabase(options), /inbound_jobs/);
+      } else {
+        query("ALTER TABLE emails ADD COLUMN otp_code INTEGER;");
+        await assert.rejects(prepareDatabase(options), /otp_code 必须为可空 TEXT/);
       }
     }
-    const options = { configPath, persistTo, local: true };
-    await applyMigrations(options);
-    const schema = query("SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name <> 'd1_migrations' ORDER BY type,name");
-    if (scenario === "fresh") expectedSchema = schema;
-    else {
-      assert.deepEqual(schema, expectedSchema, `${scenario}: 结构应与全新建库一致`);
-      assert.deepEqual(query("SELECT subject,text_body,attachments,push_status,storage_status,raw_key,deleted_at FROM emails WHERE id='kept'"), [{
-        subject: "existing mail", text_body: "keep body", attachments: "[]",
-        push_status: scenario === "old-0001" ? null : "ok", storage_status: "complete", raw_key: null, deleted_at: null,
-      }]);
+    if (scenario === "fresh" || scenario === "manual-upgrade") {
+      const ledger = query("SELECT * FROM d1_migrations ORDER BY id");
+      const rows = query("SELECT * FROM emails");
+      await prepareDatabase(options);
+      assert.deepEqual(query("SELECT * FROM d1_migrations ORDER BY id"), ledger, "重跑不能更改历史记账");
+      assert.deepEqual(query("SELECT * FROM emails"), rows, "重跑不能更改邮件数据");
+      if (scenario === "fresh") assert.deepEqual(ledger.map(row => row["name"]), ["0001_init.sql"]);
+      if (scenario === "manual-upgrade") {
+        query("CREATE UNIQUE INDEX idx_emails_message_id ON emails (message_id) WHERE message_id IS NOT NULL AND message_id <> ''; ");
+        await assert.rejects(prepareDatabase(options), /去重索引/);
+      }
     }
-    const ledger = query("SELECT * FROM d1_migrations ORDER BY id");
-    assert.equal(ledger.filter(row => row["name"] === "0002_reliability.sql").length, 1);
-    await applyMigrations(options);
-    assert.deepEqual(query("SELECT * FROM d1_migrations ORDER BY id"), ledger, "重跑不重复记账");
-    assert.equal(await readFile("migrations/0002_reliability.sql", "utf8"), original, "不能修改源码中的 SQL");
-    console.log(`通过：${scenario} 升级、原数据保留、重复执行`);
+    console.log(`通过：${scenario}`);
   }
+  assert.equal(await readFile("migrations/0001_init.sql", "utf8"), initial, "部署不能改写初始化 SQL");
 } finally {
   await rm(root, { recursive: true, force: true });
 }

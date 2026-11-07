@@ -55,9 +55,13 @@ export function createSettingsController(
   let confirming = false;
   let requestVersion = 0;
   let saveVersion = 0;
+  let baseline = "";
+  let loaded = false;
 
   const setDirty = (value: boolean): void => {
     dirty = value;
+    el<HTMLElement>("#settings-dirty").hidden = !dirty;
+    el<HTMLButtonElement>("#settings-save").disabled = !dirty || saving || loading || !loaded;
   };
 
   const show = (open: boolean): void => {
@@ -97,9 +101,11 @@ export function createSettingsController(
     return true;
   };
 
-  form().addEventListener("input", () => {
-    if (opened) setDirty(true);
-  });
+  const updateDirty = (): void => {
+    if (opened && loaded) setDirty(JSON.stringify(collect()) !== baseline);
+  };
+  form().addEventListener("input", updateDirty);
+  form().addEventListener("change", updateDirty);
 
   // ---- 测试推送 ---------------------------------------------------------
   // 用独立按钮而不是表单提交：测试不应触发保存，也不该改动 dirty 状态。
@@ -210,7 +216,7 @@ export function createSettingsController(
     form().querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea").forEach((control) => {
       control.disabled = disabled;
     });
-    el<HTMLButtonElement>("#settings-save").disabled = disabled;
+    el<HTMLButtonElement>("#settings-save").disabled = disabled || !dirty || !loaded;
   };
 
   /**
@@ -354,16 +360,20 @@ export function createSettingsController(
     async open(): Promise<void> {
       if (loading || saving || opened) return;
       loading = true;
+      loaded = false;
+      setControlsDisabled(true);
       const request = ++requestVersion;
       errBox().textContent = "";
       try {
-        const loaded = await api.request<SettingsView>("/api/settings");
+        const config = await api.request<SettingsView>("/api/settings");
         if (request !== requestVersion) return;
-        fill(loaded);
+        fill(config);
+        loaded = true;
+        baseline = JSON.stringify(collect());
         setDirty(false);
         el<HTMLElement>(".settings-content").scrollTop = 0;
         show(true);
-        afterOpen?.(loaded);
+        afterOpen?.(config);
         void loadLastPush(request);
       } catch (error) {
         if (request === requestVersion) {
@@ -372,7 +382,10 @@ export function createSettingsController(
         }
         throw error;
       } finally {
-        if (request === requestVersion) loading = false;
+        if (request === requestVersion) {
+          loading = false;
+          setControlsDisabled(!loaded);
+        }
       }
     },
 
@@ -389,6 +402,8 @@ export function createSettingsController(
       loading = false;
       saving = false;
       confirming = false;
+      loaded = false;
+      baseline = "";
       setDirty(false);
       setControlsDisabled(false);
       el<HTMLButtonElement>("#settings-save").removeAttribute("aria-busy");
@@ -396,7 +411,7 @@ export function createSettingsController(
     },
 
     async save(): Promise<void> {
-      if (!opened || saving) return;
+      if (!opened || saving || loading || !loaded || !dirty || !form().reportValidity()) return;
       saving = true;
       const request = ++saveVersion;
       const patch = collect();
@@ -411,6 +426,7 @@ export function createSettingsController(
         });
         if (request !== saveVersion) return;
         fill(saved);
+        baseline = JSON.stringify(collect());
         setDirty(false);
         view().dispatchEvent(new CustomEvent("settings-saved", { bubbles: true }));
       } catch (error) {

@@ -11,6 +11,7 @@ import { icon } from "./icons.ts";
 import type { AppState } from "./state.ts";
 import { senderInitial, senderLabel, senderTone } from "./sender.ts";
 import { emptyState, skeletonRows } from "./ui.ts";
+import { setUnreadTitle } from "./site-theme.ts";
 
 export interface ListHandlers {
   /** 点击某封邮件。 */
@@ -21,6 +22,7 @@ export interface ListHandlers {
 
 /** 更新侧边栏「未读邮件」角标。 */
 function renderUnreadBadge(state: AppState): void {
+  setUnreadTitle(state.unread);
   const badge = el<HTMLElement>("#count-unread-nav");
   if (state.unread > 0) {
     badge.hidden = false;
@@ -34,6 +36,8 @@ function renderUnreadBadge(state: AppState): void {
 /** 渲染整个列表。 */
 export function renderList(state: AppState, handlers: ListHandlers): void {
   const pane = el<HTMLElement>("#list-pane");
+  const focusedId = pane.contains(document.activeElement)
+    ? (document.activeElement as HTMLElement).dataset["mailId"] : undefined;
   renderUnreadBadge(state);
   const count = el<HTMLElement>("#list-count");
   count.hidden = state.items.length === 0;
@@ -81,6 +85,10 @@ export function renderList(state: AppState, handlers: ListHandlers): void {
   }
 
   pane.replaceChildren(frag);
+  if (focusedId) {
+    [...pane.querySelectorAll<HTMLButtonElement>(".mail-item")]
+      .find(row => row.dataset["mailId"] === focusedId)?.focus({ preventScroll: true });
+  }
 }
 
 /** 单行邮件。 */
@@ -91,6 +99,7 @@ function buildRow(item: EmailSummary, selected: boolean, onOpen: (id: string) =>
     ariaLabel: `${item.is_read ? "" : "未读，"}${item.sender || "未知发件人"}，${item.subject || "无主题"}${item.recipient ? `，收件地址：${item.recipient}` : ""}`,
   });
   if (selected) row.setAttribute("aria-current", "true");
+  row.dataset["mailId"] = item.id;
 
   const name = senderLabel(item.sender);
   row.append(create("span", {
@@ -111,7 +120,17 @@ function buildRow(item: EmailSummary, selected: boolean, onOpen: (id: string) =>
   );
   content.append(head);
 
-  content.append(create("div", { className: "subj", textContent: item.subject || "(无主题)", title: item.subject }));
+  const subjectLine = create("div", { className: "mail-subject-line" });
+  subjectLine.append(create("span", { className: "subj", textContent: item.subject || "(无主题)", title: item.subject }));
+  if (item.otp_code) {
+    subjectLine.append(create("span", {
+      className: "mail-otp",
+      textContent: item.otp_code,
+      title: `验证码：${item.otp_code}`,
+    }));
+    row.setAttribute("aria-label", `${row.getAttribute("aria-label")}，验证码：${item.otp_code}`);
+  }
+  content.append(subjectLine);
 
   // 压缩空白后截断；`textContent` 赋值保证不会把预览当 HTML 解析。
   content.append(create("div", {

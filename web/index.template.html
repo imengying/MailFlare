@@ -218,7 +218,7 @@
   .list-count:empty { display: none; }
   .search { position: relative; flex: 0 1 260px; min-width: 130px; }
   .search > .icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; color: var(--text-faint); pointer-events: none; }
-  .search input { min-height: 38px; padding: 8px 12px 8px 36px; border: 1px solid var(--border); background: var(--surface-2); font-size: 13px; border-radius: 10px; }
+  .search input { min-height: 38px; padding: 8px 12px 8px 36px; border: 1px solid var(--border); background: var(--surface-2); font-size: 13px; border-radius: 10px; text-overflow: ellipsis; }
   .search:focus-within > .icon { color: var(--accent); }
   .search input:focus { background: var(--surface); border-color: var(--accent); }
   .menu-btn { display: none; }
@@ -240,7 +240,9 @@
   .mail-item .row1 { display: flex; align-items: center; gap: 7px; min-height: 19px; }
   .mail-item .from { font-weight: 550; font-size: 13px; color: var(--text-dim); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mail-item .when { font-size: 11px; color: var(--text-faint); flex-shrink: 0; font-variant-numeric: tabular-nums; }
-  .mail-item .subj { font-size: 13px; font-weight: 550; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mail-subject-line { display: flex; align-items: center; gap: 8px; margin-top: 4px; min-width: 0; }
+  .mail-item .subj { flex: 1; min-width: 0; font-size: 13px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mail-otp { flex: 0 0 auto; max-width: 55%; padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--accent); font: 600 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mail-item .snippet { font-size: 12px; color: var(--text-faint); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mail-footer { display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: 7px; font-size: 11px; color: var(--text-dim); }
   .mail-recipient { display: flex; align-items: baseline; gap: 6px; flex: 1; min-width: 0; }
@@ -266,10 +268,15 @@
   .list-pane .empty-icon .icon { width: 28px; height: 28px; }
   .detail-toolbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; flex-shrink: 0; min-height: 52px; padding: 8px 20px; border-bottom: 1px solid var(--border); background: var(--surface); }
   .detail-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; margin-left: auto; }
+  .action-divider { flex: 0 0 1px; height: 18px; margin: 0 4px; background: var(--border); }
   .detail-actions a:hover { text-decoration: none; }
   .detail-actions .btn.danger:hover { background: var(--danger-soft); color: var(--danger); }
   .detail-head { flex-shrink: 0; padding: 24px 28px; border-bottom: 1px solid var(--border); }
   .detail-subject { min-width: 0; font-size: 22px; font-weight: 650; line-height: 1.5; letter-spacing: -.45px; margin: 0; overflow-wrap: anywhere; }
+  .otp-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; margin-top: 18px; padding: 14px 16px; border: 1px solid var(--accent-ring); border-radius: 10px; background: var(--accent-soft); }
+  .otp-label { font-size: 12px; color: var(--text-dim); }
+  .otp-code { flex: 1; min-width: 0; font: 650 28px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace; font-variant-numeric: tabular-nums; letter-spacing: .08em; color: var(--accent); overflow-wrap: anywhere; user-select: all; }
+  .otp-bar .btn { flex-shrink: 0; }
   .detail-meta { display: flex; align-items: flex-start; gap: 12px; margin-top: 20px; }
   .detail-avatar { flex-shrink: 0; width: 36px; height: 36px; }
   .detail-info { min-width: 0; flex: 1; }
@@ -287,7 +294,8 @@
   .body-wrap { width: 100%; max-width: 1000px; margin: 0 auto; padding: 24px 28px 40px; }
   .body-scroll { min-height: 240px; }
   .text-body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.85; margin: 0; }
-  iframe.mail-html { width: 100%; border: 0; border-radius: 5px; background: #fff; min-height: 320px; display: block; }
+  .mail-frame { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #fff; }
+  iframe.mail-html { width: 100%; border: 0; background: #fff; min-height: 320px; display: block; }
   .attachments { margin-top: 22px; }
   .section-label { display: flex; align-items: center; gap: 7px; margin: 0 0 10px; color: var(--text-dim); font-size: 12.5px; font-weight: 600; }
   .section-label .icon { width: 16px; height: 16px; }
@@ -300,7 +308,11 @@
   .att a:hover .name { color: var(--accent); }
   .att .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 12.5px; }
   .att .size { color: var(--text-faint); font-size: 11px; flex-shrink: 0; }
-  .att.missing { opacity: .65; }
+  .notice { display: flex; align-items: flex-start; gap: 9px; margin-top: 18px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--avatar-amber-fg) 25%, var(--border)); border-radius: 9px; background: var(--avatar-amber-bg); color: var(--avatar-amber-fg); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+  .notice .icon { margin-top: 2px; }
+  .att.missing { border-style: dashed; }
+  .attachment-status { align-self: flex-start; margin-top: 4px; padding: 1px 6px; border-radius: 4px; background: var(--avatar-amber-bg); color: var(--avatar-amber-fg); font-size: 11px; }
+  .attachment-help { color: var(--text-dim); font-size: 12px; overflow-wrap: anywhere; }
   .imgbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; margin-bottom: 16px; font-size: 12px; background: var(--accent-soft); border-radius: 9px; color: var(--text-dim); }
   .imgbar > span { display: inline-flex; align-items: center; gap: 8px; }
   .imgbar .icon { width: 16px; height: 16px; color: var(--accent); }
@@ -312,6 +324,7 @@
   .settings-head { display: flex; align-items: center; gap: 12px; min-height: 68px; padding: 14px 36px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--surface) 90%, transparent); backdrop-filter: blur(16px); flex-shrink: 0; }
   .settings-heading { flex: 1; min-width: 0; }
   .settings-heading h2 { margin: 0; font-size: 17px; line-height: 1.3; font-weight: 650; letter-spacing: -.25px; }
+  .settings-dirty { margin: 4px 0 0; font-size: 12px; color: var(--avatar-amber-fg); }
   .settings-menu { display: none; flex-shrink: 0; }
   .settings-error { margin: 0 36px 16px; padding: 10px 12px; border-radius: 9px; background: var(--danger-soft); flex-shrink: 0; }
   .settings-error:empty { display: none; }
@@ -360,6 +373,10 @@
 
   #toast { position: fixed; left: 50%; bottom: max(28px, env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(10px); background: var(--text); color: var(--surface); padding: 11px 18px; border: 1px solid color-mix(in srgb, var(--text) 75%, var(--surface)); border-radius: 12px; font-size: 13px; box-shadow: var(--shadow-lg); opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; z-index: 60; max-width: min(480px, 90vw); text-align: center; }
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.has-action { display: flex; align-items: center; gap: 16px; text-align: left; }
+  #toast.has-action.show { pointer-events: auto; }
+  .toast-action { flex-shrink: 0; border: 0; border-radius: 6px; background: var(--surface); color: var(--text); padding: 6px 10px; font-size: 12px; font-weight: 650; }
+  .toast-action:disabled { opacity: .65; cursor: wait; }
   .skeleton { background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%); background-size: 300% 100%; animation: sk 1.4s ease infinite; border-radius: 6px; }
   .mail-item.skeleton-row { grid-template-columns: 1fr; }
   .mail-item.skeleton-row:hover { background: transparent; }
@@ -410,10 +427,14 @@
     #mark-all-read { width: 38px; padding: 8px; }
     .detail-head { padding: 15px 16px 18px; }
     .detail-subject { font-size: 18px; }
+    .otp-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 12px; }
+    .otp-label { grid-column: 1 / -1; }
+    .otp-code { font-size: 26px; letter-spacing: .04em; }
     .detail-toolbar { padding: 8px; gap: 4px; }
     .detail-actions { gap: 2px; justify-content: flex-end; }
     .detail-actions .btn, .detail-back { padding: 7px 8px; font-size: 12px; }
-    .detail-actions .icon { display: none; }
+    .detail-actions .compact-action { min-width: 38px; min-height: 38px; padding: 9px; }
+    .detail-actions .compact-action .action-label { display: none; }
     .detail-meta { margin-top: 16px; gap: 10px; }
     .detail-avatar { width: 32px; height: 32px; }
     .meta-line { gap: 6px 8px; }
@@ -520,7 +541,7 @@
         <span class="list-count" id="list-count" hidden></span>
       </div>
       <div class="grow"></div>
-      <div class="search"><span data-icon="search"></span><input class="input" id="search" type="search" placeholder="搜索邮件" aria-label="搜索当前邮件列表"></div>
+      <div class="search"><span data-icon="search"></span><input class="input" id="search" type="search" placeholder="搜索主题、发件人、收件地址" aria-label="搜索主题、发件人、收件地址"></div>
       <button class="btn sm ghost" id="mark-all-read" aria-label="全部标为已读" title="将全部邮件标为已读"><span data-icon="checks"></span><span class="button-label">全部已读</span></button>
       <button class="btn icon-btn ghost" id="refresh" title="刷新邮件" aria-label="刷新邮件"><span data-icon="refresh"></span></button>
     </div>
@@ -534,6 +555,7 @@
             <button class="btn icon-btn ghost settings-menu" type="button" id="settings-menu" aria-label="打开导航" aria-controls="sidebar"><span data-icon="menu"></span></button>
             <div class="settings-heading">
               <h2 id="settings-title" tabindex="-1">设置</h2>
+              <p class="settings-dirty" id="settings-dirty" role="status" aria-live="polite" hidden>有未保存更改</p>
             </div>
           </header>
           <p class="err settings-error" id="settings-err" role="alert"></p>
@@ -550,31 +572,31 @@
                 </div>
                 <div class="field">
                   <label for="site-logo">Logo 地址</label>
-                  <input class="input" id="site-logo" autocomplete="off" placeholder="https://example.com/logo.png">
-                                  </div>
+                  <input class="input" id="site-logo" autocomplete="off" placeholder="https://example.com/logo.png" aria-describedby="site-logo-hint">
+                  <p class="hint" id="site-logo-hint">仅支持 https:// 图片地址，留空使用默认 Logo。</p>
+                </div>
                 <div class="field full">
                   <label for="site-background">登录页背景</label>
-                  <input class="input" id="site-background" autocomplete="off" placeholder="https://example.com/bg.jpg">
-                                  </div>
+                  <input class="input" id="site-background" autocomplete="off" placeholder="https://example.com/bg.jpg" aria-describedby="site-background-hint">
+                  <p class="hint" id="site-background-hint">仅支持 https:// 图片地址，留空使用默认背景。</p>
+                </div>
               </div>
             </section>
 
             <section class="settings-section">
               <header class="settings-section-head">
                 <span class="settings-section-icon"><span data-icon="shield"></span></span>
-                <div><h3>安全</h3><p>登录页的人机验证（Turnstile）。</p></div>
+                <div><h3>安全</h3><p id="turnstile-settings-hint">启用人机验证需同时配置 Site Key 和 Secret Key；已配置的 Secret 留空表示不修改。</p></div>
               </header>
               <div class="settings-section-body settings-grid two-column">
                 <div class="field">
                   <label for="ts-site-key">Site Key</label>
-                  <input class="input" id="ts-site-key" autocomplete="off" placeholder="0x4AAA...">
+                  <input class="input" id="ts-site-key" aria-describedby="turnstile-settings-hint" autocomplete="off" placeholder="0x4AAA...">
                 </div>
                 <div class="field">
                   <label for="ts-secret">Secret Key</label>
-                  <input class="input" id="ts-secret" type="password" autocomplete="off" placeholder="0x4AAA...">
+                  <input class="input" id="ts-secret" aria-describedby="turnstile-settings-hint" type="password" autocomplete="off" placeholder="0x4AAA...">
                 </div>
-                <div class="field full">
-                                  </div>
               </div>
             </section>
 
@@ -656,12 +678,14 @@
               <div class="settings-section-body settings-grid two-column">
                 <div class="field">
                   <label for="blocked-senders">发件人黑名单</label>
-                  <textarea class="input textarea" id="blocked-senders" rows="4" placeholder="spam@example.com&#10;@ads.example.com&#10;bad-domain.com"></textarea>
-                                  </div>
+                  <textarea class="input textarea" id="blocked-senders" rows="4" placeholder="spam@example.com&#10;@ads.example.com&#10;bad-domain.com" aria-describedby="blocked-senders-hint"></textarea>
+                  <p class="hint" id="blocked-senders-hint">每行一条：a@b.com 匹配完整地址；@b.com 和 b.com 匹配该域名及子域。命中后静默丢弃，不发送退信。</p>
+                </div>
                 <div class="field">
                   <label for="allowed-recipients">收件人白名单</label>
-                  <textarea class="input textarea" id="allowed-recipients" rows="4" placeholder="留空 = 接收本域任意地址"></textarea>
-                                  </div>
+                  <textarea class="input textarea" id="allowed-recipients" rows="4" placeholder="留空 = 接收本域任意地址" aria-describedby="allowed-recipients-hint"></textarea>
+                  <p class="hint" id="allowed-recipients-hint">留空表示不限制收件地址；填写后，未匹配名单的邮件会静默丢弃，不发送退信。请确认地址填写正确。</p>
+                </div>
               </div>
             </section>
 
@@ -673,19 +697,23 @@
               <div class="settings-section-body settings-grid two-column">
                 <div class="field">
                   <label for="max-message">单封邮件上限</label>
-                  <div class="inline-input"><input class="input" id="max-message" type="number" min="1" max="25" step="1"><span class="unit">MB</span></div>
-                                  </div>
+                  <div class="inline-input"><input class="input" id="max-message" type="number" min="1" max="25" step="1" aria-describedby="max-message-hint"><span class="unit">MB</span></div>
+                  <p class="hint" id="max-message-hint">可填写 1–25 MB，超过上限的邮件将被拒收。</p>
+                </div>
                 <div class="field">
                   <label for="max-body">正文入库上限</label>
-                  <div class="inline-input"><input class="input" id="max-body" type="number" min="4" max="900" step="4"><span class="unit">KB</span></div>
-                                  </div>
+                  <div class="inline-input"><input class="input" id="max-body" type="number" min="4" max="900" step="4" aria-describedby="max-body-hint"><span class="unit">KB</span></div>
+                  <p class="hint" id="max-body-hint">可填写 4–900 KB，超过部分在数据库中截断；配置 R2 并成功保存原文后，可导出完整 EML。</p>
+                </div>
                 <div class="field">
                   <label for="max-attachment">单个附件上限</label>
-                  <div class="inline-input"><input class="input" id="max-attachment" type="number" min="1" max="25" step="1"><span class="unit">MB</span></div>
-                                  </div>
+                  <div class="inline-input"><input class="input" id="max-attachment" type="number" min="1" max="25" step="1" aria-describedby="max-attachment-hint"><span class="unit">MB</span></div>
+                  <p class="hint" id="max-attachment-hint">可填写 1–25 MB，超限附件不单独保存；原文已保存时，可导出 EML 查看。</p>
+                </div>
                 <div class="field">
                   <label for="r2-concurrency">附件上传并发</label>
-                  <input class="input" id="r2-concurrency" type="number" min="1" max="16" step="1">
+                  <input class="input" id="r2-concurrency" type="number" min="1" max="16" step="1" aria-describedby="r2-concurrency-hint">
+                  <p class="hint" id="r2-concurrency-hint">可填写 1–16，表示同时上传的附件数量。</p>
                 </div>
               </div>
             </section>
@@ -698,16 +726,18 @@
               <div class="settings-section-body settings-grid two-column">
                 <div class="field">
                   <label for="page-size">每页条数</label>
-                  <input class="input" id="page-size" type="number" min="1" max="100" step="1">
+                  <input class="input" id="page-size" type="number" min="1" max="100" step="1" aria-describedby="page-size-hint">
+                  <p class="hint" id="page-size-hint">可填写 1–100，且不能超过每页条数上限。</p>
                 </div>
                 <div class="field">
                   <label for="page-size-max">每页条数上限</label>
-                  <input class="input" id="page-size-max" type="number" min="1" max="200" step="1">
+                  <input class="input" id="page-size-max" type="number" min="1" max="200" step="1" aria-describedby="page-size-max-hint">
+                  <p class="hint" id="page-size-max-hint">可填写 1–200。</p>
                 </div>
               </div>
             </section>
           </div>
-          <button class="btn primary" type="submit" id="settings-save"><span data-icon="check"></span>保存</button>
+          <button class="btn primary" type="submit" id="settings-save" disabled><span data-icon="check"></span>保存</button>
         </form>
       </section>
     </div>

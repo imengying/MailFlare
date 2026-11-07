@@ -2,9 +2,10 @@
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 import type { Route } from "playwright-core";
+import { checkInteractions } from "./check-ui-interactions.ts";
 const browser = await chromium.launch({ executablePath: process.env["CHROMIUM_PATH"] ?? "/usr/bin/chromium", args: ["--no-sandbox"] });
 const html = await Bun.file("public/index.html").text();
-const email = { id: "demo", sender: "Sender <sender@example.test>", recipient: "account-notifications+november@long-subdomain.example.test", subject: "界面测试邮件：这是一封包含较长标题和完整收件地址的通知", preview: "这是一段很长的广告正文预览，不应挤占收件地址的空间。".repeat(8), is_read: false, created_at: Date.now(), attachment_count: 2, message_id: "demo@example.test", text_body: "hello", html_body: "", attachments: [], attachment_urls: [], otp_code: null, push_status: null, raw_key: "mail/demo/original.eml", original_url: "/api/originals/demo?token=local", storage_status: "complete", deleted_at: null as number | null };
+const email = { id: "demo", sender: "Sender <sender@example.test>", recipient: "account-notifications+november@long-subdomain.example.test", subject: "界面测试邮件：这是一封包含较长标题和完整收件地址的通知", preview: "这是一段很长的广告正文预览，不应挤占收件地址的空间。".repeat(8), is_read: false, created_at: Date.now(), attachment_count: 2, message_id: "demo@example.test", text_body: "hello", html_body: "", attachments: [], attachment_urls: [], otp_code: null as string | null, push_status: null, raw_key: "mail/demo/original.eml", original_url: "/api/originals/demo?token=local", storage_status: "complete", deleted_at: null as number | null };
 let oldSearch: Route | undefined;
 email.html_body = '<p>hello</p><img src="https://tracker.test/ui-pixel">';
 try {
@@ -38,7 +39,12 @@ try {
     throw new Error(`未模拟的请求: ${request.method()} ${url.pathname}`);
   });
   await page.goto("https://mailflare.test/");
-  await page.locator(".mail-item").waitFor();
+  await page.locator("button.mail-item").waitFor();
+  assert.equal(await page.locator(".mail-otp").count(), 0, "没有验证码的列表项不占位");
+  email.otp_code = "012-345";
+  await page.locator("#refresh").click();
+  await page.locator(".mail-otp").waitFor();
+  assert.equal(await page.locator(".mail-otp").textContent(), email.otp_code, "列表保留前导零和连字符");
   // 验证实际排版：长摘要、长地址和附件同时出现时，地址仍有可读宽度。
   for (const width of [1440, 1280, 1100, 1024, 861, 860, 768, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });
@@ -47,6 +53,8 @@ try {
       const recipient = row.querySelector<HTMLElement>(".mail-recipient")!;
       const snippet = row.querySelector<HTMLElement>(".snippet")!;
       const attachment = row.querySelector<HTMLElement>(".attachment-tag")!;
+      const otp = row.querySelector<HTMLElement>(".mail-otp")!;
+      const subject = row.querySelector<HTMLElement>(".subj")!;
       const rect = address.getBoundingClientRect();
       return {
         width: rect.width,
@@ -56,20 +64,33 @@ try {
         title: recipient.title,
         pageFits: document.documentElement.scrollWidth <= innerWidth,
         sidebarWidth: document.querySelector("#sidebar")!.getBoundingClientRect().width,
+        otpFits: otp.scrollWidth <= otp.clientWidth && otp.getBoundingClientRect().right <= row.getBoundingClientRect().right,
+        subjectFits: subject.getBoundingClientRect().right <= otp.getBoundingClientRect().left && subject.clientWidth >= 80,
       };
     });
     assert(layout.width >= 140, `${width}px: 收件地址不能被压到只剩标签`);
     assert(layout.separateLine && layout.contained && layout.pageFits, `${width}px: 地址、摘要和附件不能重叠或溢出`);
+    assert(layout.otpFits && layout.subjectFits, `${width}px: 验证码完整显示，主题仍有可读空间`);
     assert.equal(layout.ellipsis, "ellipsis", "过长地址应明确省略，不能直接裁切");
     assert.equal(layout.title, `收件地址：${email.recipient}`, "悬停能查看完整地址");
     if (width > 860) assert(layout.sidebarWidth <= 160, "桌面导航应收窄");
   }
   await page.setViewportSize({ width: 1280, height: 900 });
+  email.otp_code = null;
+  await page.locator("#refresh").click();
+  await page.locator(".mail-otp").waitFor({ state: "detached" });
   await page.getByRole("button", { name: /界面测试邮件/ }).click();
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: "https://mailflare.test" });
   await page.getByRole("button", { name: "复制收件地址" }).click();
   await page.getByText("收件地址已复制", { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), email.recipient);
+  assert.equal(await page.locator(".otp-bar").count(), 0, "没有验证码不占位");
+  email.otp_code = "012-345";
+  await page.locator("#refresh").click();
+  await page.getByRole("button", { name: "复制验证码", exact: true }).click();
+  await page.getByText("验证码已复制", { exact: true }).waitFor();
+  assert.equal(await page.locator(".otp-code").textContent(), email.otp_code);
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), email.otp_code, "保留前导零和分隔符");
   for (const width of [1280, 1024, 861, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });
     const layout = await page.locator("#detail-pane").evaluate(pane => {
@@ -85,10 +106,14 @@ try {
       };
     });
     assert(layout.titleFits && layout.actionsFit && layout.separateTitle && layout.pageFits, `${width}px: 长标题和操作栏应完整显示`);
+    if (width <= 600) assert(await page.getByRole("button", { name: "删除", exact: true }).locator(".icon").isVisible(), "手机操作栏保留图标");
+    assert(await page.locator(".otp-code").evaluate(node => node.getBoundingClientRect().height <= parseFloat(getComputedStyle(node).lineHeight) + 1), `${width}px: 常见验证码应完整显示在一行`);
   }
   await page.setViewportSize({ width: 1280, height: 900 });
   assert.equal(await page.getByRole("link", { name: "导出原文" }).getAttribute("href"), email.original_url);
   await page.frameLocator("iframe.mail-html").getByText("hello", { exact: true }).waitFor();
+  assert.equal(await page.locator("iframe.mail-html").evaluate(node => getComputedStyle(node).borderWidth), "0px", "边框不得扣减 iframe 内容高度");
+  assert.equal(await page.locator(".mail-frame").evaluate(node => getComputedStyle(node).borderTopWidth), "1px");
   assert.equal(imageRequests, 0, "打开邮件时远程图片不能加载");
   assert.equal(await page.getByRole("button", { name: "显示图片", exact: true }).count(), 1, "禁图提示只能出现一次");
   await Promise.all([
@@ -103,6 +128,13 @@ try {
   await page.getByRole("button", { name: "彻底删除", exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "显示图片", exact: true }).count(), 1, "重新打开邮件恢复禁图");
   assert(await page.locator("#mark-all-read").isDisabled());
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    assert(await page.locator(".detail-toolbar").evaluate(node => [...node.querySelectorAll("button, a")].every(button => button.getBoundingClientRect().right <= innerWidth)), "回收站操作栏在手机上也不溢出");
+    assert(await page.getByRole("button", { name: "恢复", exact: true }).locator(".icon").isVisible());
+    assert(await page.getByRole("button", { name: "彻底删除", exact: true }).isVisible());
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByRole("button", { name: "恢复", exact: true }).click();
   await page.getByText("回收站是空的", { exact: true }).waitFor();
   await page.getByRole("button", { name: "全部邮件", exact: true }).click();
@@ -176,5 +208,6 @@ try {
   assert.equal(submittedTokens.at(-1), "fresh-token");
   assert(await login.evaluate(() => (window as TurnstileHarness).visibleAtReset), "登录失败必须先显示挂件再重置");
   assert.deepEqual(loginErrors, []);
+  await checkInteractions(browser, html);
   console.log("通过：320–1440px 收件地址与附件布局、长标题操作栏、复制完整地址、禁图提示与主动加载、删除/恢复/原文导出、搜索乱序、手机导航、人机验证隐藏与失效恢复");
 } finally { await browser.close(); }

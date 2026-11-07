@@ -8,6 +8,14 @@
 
 import { icon } from "./icons.ts";
 
+let siteName = "MailFlare";
+let unreadCount = 0;
+
+export function setUnreadTitle(count: number): void {
+  unreadCount = Math.max(0, count);
+  document.title = `${unreadCount > 0 ? `(${unreadCount > 99 ? "99+" : unreadCount}) ` : ""}${siteName}`;
+}
+
 /** 与后端 `AuthConfigResponse` 的站点字段对应。 */
 export interface SiteAppearance {
   readonly site_name: string;
@@ -61,7 +69,8 @@ export function applySiteIdentity(site: SiteAppearance): void {
   }
 
   // 顺带更新页面标题，浏览器标签页也能看到站点名。
-  document.title = name;
+  siteName = name;
+  setUnreadTitle(unreadCount);
 }
 
 /** 应用登录页背景。空值表示沿用默认渐变。 */

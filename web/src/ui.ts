@@ -3,18 +3,84 @@
 import { create, el } from "./dom.ts";
 import { icon, type IconName } from "./icons.ts";
 
-let toastTimer: ReturnType<typeof setTimeout> | null = null;
+let clearToast: (() => void) | undefined;
+let toastVersion = 0;
 
-export function toast(message: string, durationMs = 2400): void {
+export interface ToastAction {
+  label: string;
+  onClick(): void | Promise<void>;
+}
+
+export function dismissToast(): void {
+  toastVersion += 1;
+  clearToast?.();
+  clearToast = undefined;
+}
+
+/** 剪贴板不可用或被拒绝时给出可操作的提示。 */
+export async function copyText(value: string, successMessage: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(value);
+    toast(successMessage);
+    return true;
+  } catch {
+    toast("复制失败，请选择文字手动复制");
+    return false;
+  }
+}
+
+export function toast(message: string, durationMs = 2400, action?: ToastAction): void {
+  dismissToast();
   const node = document.querySelector<HTMLElement>("#toast");
   if (!node) return;
-  node.textContent = message;
+  const version = toastVersion;
+  const listeners = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let remaining = action ? Math.max(6000, durationMs) : durationMs;
+  let started = 0;
+  let running = false;
+  const pause = (): void => {
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    timer = undefined;
+    remaining = Math.max(0, remaining - (performance.now() - started));
+  };
+  const resume = (): void => {
+    if (version !== toastVersion || running || timer !== undefined || node.matches(":hover") || node.contains(document.activeElement)) return;
+    started = performance.now();
+    timer = setTimeout(dismissToast, remaining);
+  };
+  clearToast = () => {
+    clearTimeout(timer);
+    listeners.abort();
+    node.classList.remove("show", "has-action");
+    node.inert = true;
+    node.replaceChildren();
+  };
+  node.replaceChildren(create("span", { className: "toast-msg", textContent: message }));
+  node.inert = false;
+  node.classList.toggle("has-action", Boolean(action));
+  if (action) {
+    const button = create("button", { className: "toast-action", type: "button", textContent: action.label });
+    button.addEventListener("click", () => {
+      if (running) return;
+      running = true;
+      pause();
+      button.disabled = true;
+      void Promise.resolve().then(() => action.onClick()).then(() => {
+        if (version === toastVersion) dismissToast();
+      }).catch((error: unknown) => {
+        if (version === toastVersion) toast(error instanceof Error ? error.message : "操作失败，请重试");
+      });
+    }, { signal: listeners.signal });
+    node.append(button);
+  }
+  node.addEventListener("mouseenter", pause, { signal: listeners.signal });
+  node.addEventListener("mouseleave", resume, { signal: listeners.signal });
+  node.addEventListener("focusin", pause, { signal: listeners.signal });
+  node.addEventListener("focusout", () => queueMicrotask(resume), { signal: listeners.signal });
   node.classList.add("show");
-  if (toastTimer !== null) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    node.classList.remove("show");
-    toastTimer = null;
-  }, durationMs);
+  resume();
 }
 
 /** 空状态支持独立标题与补充说明，错误信息不会被挤进一个小图标里。 */

@@ -46,6 +46,8 @@ pub struct EmailSummary {
     pub subject: String,
     /// 由正文截取的前若干字符，列表里做预览。
     pub preview: String,
+    /// 入库时提取；升级前的邮件为 None，列表不扫描完整正文。
+    pub otp_code: Option<String>,
     pub is_read: bool,
     pub created_at: i64,
     pub attachment_count: usize,
@@ -127,6 +129,7 @@ struct SummaryRow {
     subject: Option<String>,
     #[serde(default)]
     preview: Option<String>,
+    otp_code: Option<String>,
     /// 1 表示 preview 来自 HTML 正文，需要去标签后再展示。
     #[serde(default)]
     preview_is_html: Option<i64>,
@@ -358,19 +361,23 @@ pub async fn insert_email(db: &D1Database, email: &NewEmail<'_>) -> AppResult<bo
         + email.sender.len()
         + email.recipient.len()
         + email.subject.len()
-        + attachments_json.len();
+        + attachments_json.len()
+        + 32; // 为验证码与行元数据留出余量。
     let body_budget = MAX_ROW_BYTES.saturating_sub(fixed);
 
     // 两段正文平分剩余预算；若某段更短，把富余让给另一段。
     let text_body = crate::util::truncate_utf8(email.text_body.to_string(), body_budget / 2);
     let remaining = body_budget.saturating_sub(text_body.len());
     let html_body = crate::util::truncate_utf8(email.html_body.to_string(), remaining);
+    // 基于最终保存的正文提取，保持与详情页一致；保留前导零和连字符。
+    let otp_code =
+        crate::otp::extract(email.subject, &text_body, &html_body).map(|code| code.value);
 
     let stmt = db
         .prepare(
             "INSERT OR IGNORE INTO emails \
-             (id, message_id, sender, recipient, subject, text_body, html_body, attachments, is_read, created_at, raw_key, storage_status) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, CAST(?9 AS INTEGER), ?10, ?11)",
+             (id, message_id, sender, recipient, subject, text_body, html_body, attachments, is_read, created_at, raw_key, storage_status, otp_code) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, CAST(?9 AS INTEGER), ?10, ?11, ?12)",
         )
         .bind_refs(&[
             D1Type::Text(email.id),
@@ -387,6 +394,7 @@ pub async fn insert_email(db: &D1Database, email: &NewEmail<'_>) -> AppResult<bo
             ts(email.created_at),
             email.raw_key.map_or(D1Type::Null, D1Type::Text),
             D1Type::Text(email.storage_status),
+            otp_code.as_deref().map_or(D1Type::Null, D1Type::Text),
         ])?;
 
     let result = stmt.run().await?;
@@ -418,7 +426,7 @@ pub async fn list_emails(
         "SELECT id, sender, recipient, subject, \
          substr(COALESCE(NULLIF(text_body, ''), html_body, ''), 1, 240) AS preview, \
          CASE WHEN COALESCE(text_body, '') = '' THEN 1 ELSE 0 END AS preview_is_html, \
-         is_read, created_at, attachments \
+         is_read, created_at, attachments, otp_code \
          FROM emails WHERE 1 = 1",
     );
 
@@ -521,6 +529,7 @@ pub async fn list_emails(
                 recipient: r.recipient.unwrap_or_default(),
                 subject: r.subject.unwrap_or_else(|| "(无主题)".to_string()),
                 preview,
+                otp_code: r.otp_code,
                 is_read: r.is_read.unwrap_or(0) != 0,
                 created_at: r.created_at.unwrap_or_default(),
             }
