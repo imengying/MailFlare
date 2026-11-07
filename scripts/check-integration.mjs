@@ -304,4 +304,22 @@ try {
     }
   }
   console.log('通过：4 位码、HTML 数字边界、纯文本到 HTML 回退、中文实体、详情与通知一致、邮编/优惠码/歧义不推送');
+
+  // 广告邮件没有验证码，但旧版仍会扫描整段正文，在 & 后的中文上越界。
+  // 将触发字符放在摘要范围之外，复现“列表可见，详情打不开”的内容形态。
+  const newsletterText = 'Product updates and tips. '.repeat(30) + 'A&B中文测试邮件';
+  const newsletterHtml = `<html><head><style>${'.newsletter { color: #123456; }'.repeat(1000)}</style></head><body><p>${newsletterText}</p>${'<div>更多产品介绍与使用提示。</div>'.repeat(500)}</body></html>`;
+  const newsletterRaw = ['From: newsletter@example.test','To: to@example.test','Message-ID: <newsletter-unicode@example.test>',
+    'Subject: Product newsletter','MIME-Version: 1.0','Content-Type: multipart/alternative; boundary="newsletter"','',
+    '--newsletter','Content-Type: text/plain; charset=utf-8','',newsletterText,
+    '--newsletter','Content-Type: text/html; charset=utf-8','',newsletterHtml,'--newsletter--',''].join('\r\n');
+  await deliver(newsletterRaw);
+  const newsletterId = await emailId('Product newsletter');
+  assert((await data('/api/emails?q=Product%20newsletter')).items.some(email=>email.id===newsletterId && email.preview.includes('Product updates')));
+  const newsletter = await data(`/api/emails/${newsletterId}`);
+  assert.equal(newsletter.text_body, newsletterText);
+  assert.equal(newsletter.html_body, newsletterHtml);
+  assert.equal(newsletter.otp_code, null);
+  assert.equal((await db.prepare('SELECT count(*) AS c FROM notification_jobs WHERE email_id=?1').bind(newsletterId).first()).c,0);
+  console.log('通过：新收长广告邮件的列表摘要与详情、正文后部中文 & 字符、无验证码不推送');
 } finally { await mf.dispose(); }

@@ -11,6 +11,7 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { applyMigrations } from "./migrations.ts";
 
 /** D1 数据库名，必须与 wrangler.toml 的 database_name 一致。 */
 const DATABASE = "mailflare";
@@ -59,13 +60,11 @@ function ensureDatabase(): void {
   throw new Error(`创建 D1 数据库失败`);
 }
 
-function main(): void {
+async function main(): Promise<void> {
   ensureDatabase();
 
   log("应用数据库迁移");
-  if (!run(["d1", "migrations", "apply", "DB", "--remote"]).ok) {
-    throw new Error("应用数据库迁移失败");
-  }
+  await applyMigrations();
 
   log("发布 Worker");
   if (!run(["deploy"]).ok) {
@@ -76,7 +75,7 @@ function main(): void {
 }
 
 try {
-  main();
+  await main();
 } catch (error) {
   console.error(`\n部署中断：${error instanceof Error ? error.message : error}`);
   process.exit(1);

@@ -16,6 +16,7 @@
     "clean": "rm -rf build .cache public/index.html",
     "check:list": "bun run scripts/check-list.ts",
     "check:integration": "node scripts/check-integration.mjs",
+    "check:migrations": "bun run scripts/check-migrations.ts",
     "backup": "bun run scripts/backup.ts",
     "check:ui": "bun run build:frontend && bun run scripts/check-ui.ts"
   },

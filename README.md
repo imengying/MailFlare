@@ -47,7 +47,7 @@ Access Key ID / Secret Access Key（权限选 **Object Read & Write**，
 `bun run deploy` 会依次完成：
 
 1. **创建 D1 数据库**（已存在则跳过）
-2. **执行 `migrations/` 下未应用的 SQL**（`0001` 建库，`0002` 包含本次全部数据库改动，已执行过的不会重跑）
+2. **执行 `migrations/` 下未应用的 SQL**（`0001` 建库，`0002` 包含本次全部数据库改动，已执行过的不会重跑）。部署脚本会检查历史版本是否已添加 `push_status`：若存在且类型一致，在临时迁移副本中跳过重复加列，保留原值，其余 SQL 仍由 Wrangler 正常执行并记录；不会改写仓库 SQL。
 3. 上传 Worker
 
 所以 **D1 与表结构都是自动建好的**，不需要去控制台 Create，也不用粘 SQL。
