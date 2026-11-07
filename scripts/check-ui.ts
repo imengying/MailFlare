@@ -4,11 +4,11 @@ import { chromium } from "playwright-core";
 import type { Route } from "playwright-core";
 const browser = await chromium.launch({ executablePath: process.env["CHROMIUM_PATH"] ?? "/usr/bin/chromium", args: ["--no-sandbox"] });
 const html = await Bun.file("public/index.html").text();
-const email = { id: "demo", sender: "Sender <sender@example.test>", recipient: "inbox@example.test", subject: "界面测试邮件", preview: "hello", is_read: false, created_at: Date.now(), attachment_count: 0, message_id: "demo@example.test", text_body: "hello", html_body: "", attachments: [], attachment_urls: [], otp_code: null, push_status: null, raw_key: "mail/demo/original.eml", original_url: "/api/originals/demo?token=local", storage_status: "complete", deleted_at: null as number | null };
+const email = { id: "demo", sender: "Sender <sender@example.test>", recipient: "account-notifications+november@long-subdomain.example.test", subject: "界面测试邮件：这是一封包含较长标题和完整收件地址的通知", preview: "这是一段很长的广告正文预览，不应挤占收件地址的空间。".repeat(8), is_read: false, created_at: Date.now(), attachment_count: 2, message_id: "demo@example.test", text_body: "hello", html_body: "", attachments: [], attachment_urls: [], otp_code: null, push_status: null, raw_key: "mail/demo/original.eml", original_url: "/api/originals/demo?token=local", storage_status: "complete", deleted_at: null as number | null };
 let oldSearch: Route | undefined;
 email.html_body = '<p>hello</p><img src="https://tracker.test/ui-pixel">';
 try {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, reducedMotion: "reduce" });
   const errors: string[] = [];
   let imageRequests = 0;
   page.on("pageerror", error => errors.push(error.message));
@@ -38,7 +38,55 @@ try {
     throw new Error(`未模拟的请求: ${request.method()} ${url.pathname}`);
   });
   await page.goto("https://mailflare.test/");
+  await page.locator(".mail-item").waitFor();
+  // 验证实际排版：长摘要、长地址和附件同时出现时，地址仍有可读宽度。
+  for (const width of [1440, 1280, 1100, 1024, 861, 860, 768, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    const layout = await page.locator(".mail-item").evaluate(row => {
+      const address = row.querySelector<HTMLElement>(".recipient-address")!;
+      const recipient = row.querySelector<HTMLElement>(".mail-recipient")!;
+      const snippet = row.querySelector<HTMLElement>(".snippet")!;
+      const attachment = row.querySelector<HTMLElement>(".attachment-tag")!;
+      const rect = address.getBoundingClientRect();
+      return {
+        width: rect.width,
+        separateLine: rect.top >= snippet.getBoundingClientRect().bottom,
+        contained: rect.right <= row.getBoundingClientRect().right && rect.right <= attachment.getBoundingClientRect().left,
+        ellipsis: getComputedStyle(address).textOverflow,
+        title: recipient.title,
+        pageFits: document.documentElement.scrollWidth <= innerWidth,
+        sidebarWidth: document.querySelector("#sidebar")!.getBoundingClientRect().width,
+      };
+    });
+    assert(layout.width >= 140, `${width}px: 收件地址不能被压到只剩标签`);
+    assert(layout.separateLine && layout.contained && layout.pageFits, `${width}px: 地址、摘要和附件不能重叠或溢出`);
+    assert.equal(layout.ellipsis, "ellipsis", "过长地址应明确省略，不能直接裁切");
+    assert.equal(layout.title, `收件地址：${email.recipient}`, "悬停能查看完整地址");
+    if (width > 860) assert(layout.sidebarWidth <= 160, "桌面导航应收窄");
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByRole("button", { name: /界面测试邮件/ }).click();
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: "https://mailflare.test" });
+  await page.getByRole("button", { name: "复制收件地址" }).click();
+  await page.getByText("收件地址已复制", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), email.recipient);
+  for (const width of [1280, 1024, 861, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    const layout = await page.locator("#detail-pane").evaluate(pane => {
+      const rect = pane.getBoundingClientRect();
+      const subject = pane.querySelector<HTMLElement>(".detail-subject")!;
+      const toolbar = pane.querySelector<HTMLElement>(".detail-toolbar")!;
+      const buttons = [...toolbar.querySelectorAll<HTMLElement>("button, a")].filter(node => node.getBoundingClientRect().width > 0);
+      return {
+        titleFits: subject.scrollWidth <= subject.clientWidth,
+        actionsFit: buttons.every(node => { const r = node.getBoundingClientRect(); return r.left >= rect.left && r.right <= rect.right; }),
+        separateTitle: subject.getBoundingClientRect().top >= toolbar.getBoundingClientRect().bottom,
+        pageFits: document.documentElement.scrollWidth <= innerWidth,
+      };
+    });
+    assert(layout.titleFits && layout.actionsFit && layout.separateTitle && layout.pageFits, `${width}px: 长标题和操作栏应完整显示`);
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
   assert.equal(await page.getByRole("link", { name: "导出原文" }).getAttribute("href"), email.original_url);
   await page.frameLocator("iframe.mail-html").getByText("hello", { exact: true }).waitFor();
   assert.equal(imageRequests, 0, "打开邮件时远程图片不能加载");
@@ -128,5 +176,5 @@ try {
   assert.equal(submittedTokens.at(-1), "fresh-token");
   assert(await login.evaluate(() => (window as TurnstileHarness).visibleAtReset), "登录失败必须先显示挂件再重置");
   assert.deepEqual(loginErrors, []);
-  console.log("通过：禁图提示与主动加载、删除/恢复/原文导出、搜索乱序、手机导航、人机验证隐藏与失效恢复");
+  console.log("通过：320–1440px 收件地址与附件布局、长标题操作栏、复制完整地址、禁图提示与主动加载、删除/恢复/原文导出、搜索乱序、手机导航、人机验证隐藏与失效恢复");
 } finally { await browser.close(); }

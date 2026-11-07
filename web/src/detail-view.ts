@@ -11,7 +11,7 @@ import { icon } from "./icons.ts";
 import { buildSrcdoc, hasRemoteImages } from "./mail-render.ts";
 import type { AppState } from "./state.ts";
 import { senderInitial, senderTone } from "./sender.ts";
-import { emptyState } from "./ui.ts";
+import { emptyState, toast } from "./ui.ts";
 
 export interface DetailHandlers {
   /** 用户点了「显示图片」。 */
@@ -55,20 +55,30 @@ export function renderDetail(state: AppState, handlers: DetailHandlers): void {
   if (!detail || !pane) return;
 
   const head = create("div", { className: "detail-head" });
-  const top = create("div", { className: "detail-top" });
-  top.append(
-    create("h1", { className: "detail-subject", textContent: detail.subject || "(无主题)" }),
-    buildActions(detail, handlers),
-  );
-  head.append(top);
+  head.append(create("h1", { className: "detail-subject", textContent: detail.subject || "(无主题)" }));
 
   const meta = create("dl", { className: "meta-line" });
-  const addMeta = (label: string, value: string): void => {
+  const addMeta = (label: string, value: string): HTMLElement | undefined => {
     if (!value) return;
-    meta.append(create("dt", { textContent: label }), create("dd", { textContent: value }));
+    const entry = create("dd", { textContent: value });
+    meta.append(create("dt", { textContent: label }), entry);
+    return entry;
   };
   addMeta("发件人", detail.sender);
-  addMeta("收件人", detail.recipient);
+  const recipient = addMeta("收件人", detail.recipient);
+  if (recipient) {
+    recipient.classList.add("recipient-value");
+    recipient.replaceChildren(create("span", { textContent: detail.recipient }));
+    const copy = create("button", { className: "btn ghost icon-btn sm copy-address", type: "button", title: "复制收件地址", ariaLabel: "复制收件地址" });
+    copy.append(icon("copy"));
+    copy.addEventListener("click", () => {
+      void navigator.clipboard.writeText(detail.recipient).then(
+        () => toast("收件地址已复制"),
+        () => toast("复制失败，请选择地址手动复制"),
+      );
+    });
+    recipient.append(copy);
+  }
   const metaWrap = create("div", { className: "detail-meta" });
   const info = create("div", { className: "detail-info" });
   metaWrap.append(
@@ -100,41 +110,43 @@ export function renderDetail(state: AppState, handlers: DetailHandlers): void {
       : "彻底删除尚未完成，请再次点击彻底删除以继续清理。" }));
   }
 
-  pane.replaceChildren(head);
+  pane.replaceChildren(buildActions(detail, handlers), head);
   renderDetailBody(state, handlers);
 }
 
 /** 操作按钮组。 */
 function buildActions(detail: EmailDetail, handlers: DetailHandlers): HTMLElement {
+  const toolbar = create("div", { className: "detail-toolbar", role: "group", ariaLabel: "邮件操作" });
   const actions = create("div", { className: "detail-actions" });
 
   const back = create("button", { className: "btn sm ghost detail-back", type: "button", textContent: "返回" });
   back.prepend(icon("back"));
   back.addEventListener("click", leaveDetail);
-  actions.append(back);
+  toolbar.append(back, actions);
 
   const deleteLabel = detail.deleted_at !== null ? "彻底删除" : "删除";
-  const deleteBtn = create("button", { className: "btn sm danger", type: "button", textContent: deleteLabel, title: deleteLabel });
+  const deleteBtn = create("button", { className: "btn sm ghost danger", type: "button", textContent: deleteLabel, title: deleteLabel });
   deleteBtn.prepend(icon("trash"));
   deleteBtn.addEventListener("click", () => handlers.onDelete(detail.id));
   if (detail.deleted_at !== null) {
-    const restore = create("button", { className: "btn sm", type: "button", textContent: "恢复" });
+    const restore = create("button", { className: "btn sm ghost", type: "button", textContent: "恢复" });
     restore.disabled = detail.storage_status === "purging";
     restore.addEventListener("click", () => handlers.onRestore(detail.id));
     actions.append(restore);
   } else {
-    const unreadBtn = create("button", { className: "btn sm", type: "button", textContent: "标为未读", title: "标为未读" });
+    const unreadBtn = create("button", { className: "btn sm ghost", type: "button", textContent: "标为未读", title: "标为未读" });
     unreadBtn.prepend(icon("mail"));
     unreadBtn.addEventListener("click", () => handlers.onMarkUnread(detail.id));
     actions.append(unreadBtn);
   }
   if (detail.original_url) {
-    const download = create("a", { className: "btn sm", textContent: "导出原文", href: detail.original_url });
+    const download = create("a", { className: "btn sm ghost", textContent: "导出原文", href: detail.original_url });
+    download.prepend(icon("download"));
     download.setAttribute("download", `${detail.id}.eml`);
     actions.append(download);
   }
   actions.append(deleteBtn);
-  return actions;
+  return toolbar;
 }
 
 /** 渲染正文与附件（可重复调用，用于放开图片后重绘）。 */
@@ -197,7 +209,7 @@ const MAX_IFRAME_HEIGHT = 12000;
 
 /** 沙箱 iframe。 */
 function buildIframe(html: string, allowRemoteImages: boolean): HTMLIFrameElement {
-  const iframe = create("iframe", { className: "mail-html" });
+  const iframe = create("iframe", { className: "mail-html", title: "邮件正文" });
   // sandbox 取值说明（每一项都是必需的）：
   // - allow-same-origin：只用于读 documentElement.scrollHeight 做自适应高度。
   //   单独存在时**不会**授予脚本能力（无 allow-scripts），也无法访问父页面。

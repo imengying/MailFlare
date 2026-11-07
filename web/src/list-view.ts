@@ -83,19 +83,12 @@ export function renderList(state: AppState, handlers: ListHandlers): void {
   pane.replaceChildren(frag);
 }
 
-/** 取收件地址 `@` 之前的部分；没有别名可省时返回空串。 */
-function recipientAlias(recipient: string): string {
-  const at = recipient.lastIndexOf("@");
-  if (at <= 0) return "";
-  return recipient.slice(0, at);
-}
-
 /** 单行邮件。 */
 function buildRow(item: EmailSummary, selected: boolean, onOpen: (id: string) => void): HTMLElement {
   const row = create("button", {
     className: `mail-item${item.is_read ? "" : " unread"}${selected ? " selected" : ""}`,
     type: "button",
-    ariaLabel: `${item.is_read ? "" : "未读，"}${item.sender || "未知发件人"}，${item.subject || "无主题"}`,
+    ariaLabel: `${item.is_read ? "" : "未读，"}${item.sender || "未知发件人"}，${item.subject || "无主题"}${item.recipient ? `，收件地址：${item.recipient}` : ""}`,
   });
   if (selected) row.setAttribute("aria-current", "true");
 
@@ -114,30 +107,33 @@ function buildRow(item: EmailSummary, selected: boolean, onOpen: (id: string) =>
       textContent: name,
       title: item.sender,
     }),
-    create("span", { className: "when", textContent: formatTime(item.created_at) }),
+    create("span", { className: "when", textContent: formatTime(item.created_at), title: new Date(item.created_at).toLocaleString("zh-CN", { hour12: false }) }),
   );
   content.append(head);
 
-  content.append(create("div", { className: "subj", textContent: item.subject || "(无主题)" }));
+  content.append(create("div", { className: "subj", textContent: item.subject || "(无主题)", title: item.subject }));
 
-  const snippet = create("div", { className: "snippet" });
   // 压缩空白后截断；`textContent` 赋值保证不会把预览当 HTML 解析。
-  snippet.append(create("span", {
-    className: "snippet-text",
+  content.append(create("div", {
+    className: "snippet",
     textContent: item.preview.replace(/\s+/g, " ").trim().slice(0, 120) || "暂无正文预览",
   }));
-  const alias = recipientAlias(item.recipient);
-  if (alias) {
-    const to = create("span", { className: "mail-alias", title: `收件地址：${item.recipient}` });
-    to.append(create("span", { className: "alias-prefix", textContent: "to:" }), document.createTextNode(alias));
-    snippet.append(to);
+  // 收件地址独占元信息行，避免被长摘要挤到只剩标签；域名也保留以区分多域邮箱。
+  const footer = create("div", { className: "mail-footer" });
+  if (item.recipient) {
+    const to = create("span", { className: "mail-recipient", title: `收件地址：${item.recipient}` });
+    to.append(
+      create("span", { className: "recipient-label", textContent: "收件" }),
+      create("span", { className: "recipient-address", textContent: item.recipient }),
+    );
+    footer.append(to);
   }
   if (item.attachment_count > 0) {
     const tag = create("span", { className: "attachment-tag", title: `${item.attachment_count} 个附件` });
     tag.append(icon("paperclip"), document.createTextNode(String(item.attachment_count)));
-    snippet.append(tag);
+    footer.append(tag);
   }
-  content.append(snippet);
+  if (footer.childElementCount > 0) content.append(footer);
   row.append(content);
   row.addEventListener("click", () => onOpen(item.id));
   return row;
