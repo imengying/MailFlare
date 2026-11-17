@@ -103,7 +103,7 @@ pub fn truncate_utf8(s: String, max_bytes: usize) -> String {
     // D1 是按字节判上限的，超一点就可能让整条 INSERT 失败。
     let budget = max_bytes - SUFFIX.len();
 
-    // `floor_char_boundary` 把下标吸附到最近的 UTF-8 字符边界（Rust 1.99 稳定），
+    // `floor_char_boundary` 把下标吸附到最近的 UTF-8 字符边界（Rust 1.91 稳定），
     // 比手写 while 循环更快也不容易写错。
     let end = s.floor_char_boundary(budget);
     s.truncate(end); // 就地丢弃尾部，不再分配新字符串

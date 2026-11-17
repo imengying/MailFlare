@@ -11,6 +11,12 @@ license = "MIT"
 # Workers 需要 cdylib；保留 rlib 便于本地 `cargo test` / clippy。
 crate-type = ["cdylib"]
 
+# 1.100 起 Cargo 自带 unused_dependencies lint：
+# 本 crate 依赖大多是“按注释说明的用途”声明的（如 url 只为版本对齐
+# worker 内部），这个静态检查能在未来重构时及时暴露真正没用的依赖。
+[lints.cargo]
+unused_dependencies = "warn"
+
 [dependencies]
 # workers-rs：开启 d1 feature 才能使用 Env::d1 / D1Database。
 worker = { version = "0.8.7", features = ["d1"] }
